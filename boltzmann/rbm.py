@@ -58,6 +58,12 @@ class CD(object):
 
 
 def cd(n=1, lr=0.1):
+    """
+    Creates contrastive divergence optimizer
+    :param lr: float, learning rate
+    :param n: int, number of Gibbs sampling steps
+    :return: contrastive divergence optimizer
+    """
     return lambda model: CD(model, n=n, lr=lr)
 
 
@@ -70,6 +76,15 @@ class RBMLayer(object):
                  bias=None,
                  name=None,
                  sampled=False):
+        """
+
+        :param units: int, number of units
+        :param activation: string, 'sigmoid', 'linear' or 'relu'
+        :param use_bias: boolean, flag to use bias, if false bias set to zero and never updated
+        :param bias: 1d-array, bias initial value, if None, bias initialized with zeros
+        :param name: string, layer name
+        :param sampled: boolean,
+        """
         self.probabilistic = False
         self.units = units
         self.use_bias = use_bias
@@ -113,6 +128,11 @@ class RBMLayer(object):
 
 
 def l2(l):
+    """
+    Creates L2 regularizer
+    :param l:
+    :return:
+    """
     return lambda W, grad: W.assign_add(grad - 2 * l * W)
 
 
@@ -122,11 +142,23 @@ def _l1(W, grad, l):
 
 
 def l1(l):
+    """
+    Creates L1 regularizer
+    :param l:
+    :return:
+    """
     return lambda W, grad: _l1(W, grad, l)
 
 
 class RBMModel(object):
     def __init__(self, visible, hidden, weights=None, weights_stddev=0.01):
+        """
+        :param visible: RBMLayer, visible layer
+        :param hidden: RBMLayer, hidden layer
+        :param weights: 2d-array, weights for initialization
+        :param weights_stddev: float, if weights aren't provided, RBM weights are initialized with
+        gaussian random values with mean=0 and stddev=weights_stddev
+        """
         self.hidden = hidden
         self.visible = visible
 
@@ -151,10 +183,22 @@ class RBMModel(object):
         return GibbsChain(start=start, end=end)
 
     def get_weights(self):
+        """
+        :return: 2d-array, RBM weights
+        """
         return self.session.run(self.W)
 
     def compile(self, optimizer,
                 metrics=None, config=None, unstack=False, kernel_regularizer=None, bias_regularizer=None):
+        """
+        :param optimizer: optimizer instance, supports only cd instance
+        :param metrics: unsupported
+        :param config: config to initialize TensorFlow session
+        :param unstack: boolean. This option allows to train very large RBMs. You can switch it to true, if you get
+        OOM. Never do it otherwise, because it makes training really slow.
+        :param kernel_regularizer: available l1/l2 regularizers or None
+        :param bias_regularizer: available l1/l2 regularizers or None
+        """
         self.optimizer = optimizer(self)
         if config is not None:
             self.session = tf.Session()
@@ -215,8 +259,16 @@ class RBMModel(object):
         self.cost = free_energy
         self.session.run(tf.global_variables_initializer())
 
-    def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=True,
-            class_weight=None, sample_weight=None, initial_epoch=0, **kwargs):
+    def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=True):
+        """
+        Do RBM fitting on provided training set
+        :param x: 2d-array, training set
+        :param batch_size: int, minibatch size
+        :param nb_epoch: int, number of epochs
+        :param verbose: 0 for no output, 1 for output per minibatch, 2 for output per epoch
+        :param validation_data: 2d-array, validation data (unused right now)
+        :param shuffle: boolean, flag to shuffle training data every epoch
+        """
         if verbose > 0:
             print("Fitting RBM on {} samples with {} batch size and {} epochs".format(len(x), batch_size, nb_epoch))
 
@@ -277,10 +329,24 @@ class RBMModel(object):
             print('Fitting completed')
 
     def generate(self, x, n=1, sampled=None):
-        visible = self.gibbs_sample(self.input, n + 1, sampled=sampled).end.visible
+        """
+        Returns visible state after applying n Gibbs sampling steps
+        :param x: 2d-array, visible unit states
+        :param n: int, number of Gibbs sampling steps
+        :param sampled: boolean, if true, do sampling from units states
+        :return: 2d-array, generated visible state
+        """
+        visible = self.gibbs_sample(self.input, n, sampled=sampled).end.visible
         return self.session.run(visible, feed_dict={self.input: x})
 
     def hidden_state(self, x, n=1, sampled=None):
+        """
+        Returns hidden state after applying n Gibbs sampling steps
+        :param x: 2d-array, visible unit states
+        :param n: int, number of Gibbs sampling steps
+        :param sampled: boolean, if true, do sampling from units states
+        :return: 2d-array, generated visible state
+        """
         hidden = self.hidden.call(self.input, self.W, sampled=sampled)
         return self.session.run(hidden, feed_dict={self.input: x})
 
