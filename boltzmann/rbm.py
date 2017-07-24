@@ -8,11 +8,18 @@ CostUpdate = collections.namedtuple('CostUpdate', 'energy weight_update visible_
 
 
 class CD(object):
-    def __init__(self, model, n=1, lr=0.1):
+    def __init__(self, model, n=1, lr=0.1, momentum=None):
         self.model = model
         self.n = n
         self.lr = lr
         self.tensorArr = tf.TensorArray(tf.float32, 1, dynamic_size=True, infer_shape=False)
+
+        self.momentum = momentum
+        if momentum:
+            self.weight_velocity = None
+            self.vb_velocity = None
+            self.hb_velocity = None
+
 
     def get_cost(self, state_multi, visible_state, hidden_state):
         free_energy = tf.reduce_sum(
@@ -40,31 +47,45 @@ class CD(object):
         return tf.matmul(tf.expand_dims(visible, 2),
                          tf.expand_dims(hidden, 1))
 
+    def get_velocity(self, previous, g):
+        return g if previous is None else previous * self.momentum + g
+
     def get_cost_update(self, visible):
         gibbs_chain = self.model.gibbs_sample(visible, n=self.n)
-        # hidden = states[0][1]
-        # visible = states[0][0]
-        # hg = states[1][1]
-        # vg = states[1][0]
-        # -tf.reduce_sum(tf.reduce_mean(tf.multiply(tf.matmul(visible, self.model.W), hidden), 0))
         chain_start_multi = self.multiply_states(gibbs_chain.start.visible, gibbs_chain.start.hidden)
         chain_end_multi = self.multiply_states(gibbs_chain.end.visible, gibbs_chain.end.hidden)
-        return CostUpdate(energy=self.get_cost(chain_start_multi, gibbs_chain.start.visible, gibbs_chain.start.hidden),
-                          weight_update=tf.reduce_mean(chain_start_multi - chain_end_multi, 0) * self.lr,
-                          visible_bias_update=tf.reduce_mean(gibbs_chain.start.visible - gibbs_chain.end.visible,
-                                                             0) * self.lr,
-                          hidden_bias_update=tf.reduce_mean(gibbs_chain.start.hidden - gibbs_chain.end.hidden,
-                                                            0) * self.lr)
+
+        energy = self.get_cost(chain_start_multi, gibbs_chain.start.visible, gibbs_chain.start.hidden)
+
+        weight_update = tf.reduce_mean(chain_start_multi - chain_end_multi, 0) * self.lr
+        visible_bias_update = tf.reduce_mean(gibbs_chain.start.visible - gibbs_chain.end.visible, 0) * self.lr
+        hidden_bias_update = tf.reduce_mean(gibbs_chain.start.hidden - gibbs_chain.end.hidden, 0) * self.lr
+        if self.momentum:
+            self.weight_velocity = self.get_velocity(self.weight_velocity, weight_update)
+            self.vb_velocity = self.get_velocity(self.vb_velocity, visible_bias_update)
+            self.hb_velocity = self.get_velocity(self.hb_velocity, hidden_bias_update)
+            return CostUpdate(
+                energy=energy,
+                weight_update=self.weight_velocity,
+                visible_bias_update=self.vb_velocity,
+                hidden_bias_update=self.hb_velocity)
+
+        else:
+            return CostUpdate(
+                energy=energy,
+                weight_update=weight_update,
+                visible_bias_update=visible_bias_update,
+                hidden_bias_update=hidden_bias_update)
 
 
-def cd(n=1, lr=0.1):
+def cd(n=1, lr=0.1, momentum=None):
     """
     Creates contrastive divergence optimizer
     :param lr: float, learning rate
     :param n: int, number of Gibbs sampling steps
     :return: contrastive divergence optimizer
     """
-    return lambda model: CD(model, n=n, lr=lr)
+    return lambda model: CD(model, n=n, lr=lr, momentum=momentum)
 
 
 class RBMLayer(object):
@@ -127,27 +148,56 @@ class RBMLayer(object):
         return self.session.run(self.bias)
 
 
-def l2(l):
+class Regularizer(object):
+    def __init__(self, l):
+        self.l = l
+
+    def __call__(self, model, learnable):
+        raise NotImplementedError
+
+
+class L2(Regularizer):
     """
     Creates L2 regularizer
-    :param l:
+    :param l: regularization coefficient
     :return:
     """
-    return lambda W, grad: W.assign_add(grad - 2 * l * W)
+    def __init__(self, l):
+        super(L2, self).__init__(l)
+
+    def __call__(self, model, learnable):
+        return learnable.assign_add(- self.l * learnable)
 
 
-def _l1(W, grad, l):
-    w_update = W + grad
-    return W.assign(tf.where(tf.abs(w_update) > l, w_update - l * tf.sign(W), tf.zeros(tf.shape(W))))
-
-
-def l1(l):
+class L1(Regularizer):
     """
     Creates L1 regularizer
-    :param l:
+    :param l: regularization coefficient
     :return:
     """
-    return lambda W, grad: _l1(W, grad, l)
+    def __init__(self, l):
+        super(L1, self).__init__(l)
+
+    def __call__(self, model, learnable):
+        return learnable.assign(tf.where(tf.abs(learnable) > self.l, learnable - self.l * tf.sign(learnable),
+                                            tf.zeros(tf.shape(learnable))))
+
+
+class SparsityTarget(Regularizer):
+    def __init__(self, l, p):
+        """
+        Creates sparsity target regularizer
+        :param l: regularization coefficient
+        :param p: sparsity target
+        :return:
+        """
+        super(SparsityTarget, self).__init__(l)
+        self.p = p
+
+    def __call__(self, model, learnable):
+        q = tf.reduce_mean(model.hidden.call(model.input, model.W), 0)
+        return learnable.assign(tf.add(learnable, self.l * (self.p-q)))
+
 
 
 class RBMModel(object):
@@ -215,46 +265,45 @@ class RBMModel(object):
 
         # weight_update = tf.add(weight_update, kernel_regularizer(self.W))
 
-        if bias_regularizer is not None:
-            visible_bias_update = tf.add(visible_bias_update,
-                                         bias_regularizer(self.visible.bias))
-            hidden_bias_update = tf.add(hidden_bias_update, bias_regularizer(self.hidden.bias))
+
 
         if unstack:
             self.batch_size = tf.placeholder("float", [], name='batch_size')
             self.w_gradient = tf.Variable(tf.zeros([self.visible.units, self.hidden.units]), name="gradient")
             self.reset_w_gradient = self.w_gradient.assign(tf.zeros([self.visible.units, self.hidden.units]))
-            self.partial_w_update = kernel_regularizer(self.w_gradient,
-                                                       weight_update) if kernel_regularizer is not None else self.w_gradient.assign_add(
-                weight_update)
+            self.partial_w_update = self.w_gradient.assign_add(weight_update)
             self.update = self.W.assign_add(tf.div(self.w_gradient, self.batch_size))
 
             if self.hidden.use_bias:
                 self.hb_gradient = tf.Variable(tf.zeros([self.hidden.units]), name="gradient_hb")
                 self.reset_hb_gradient = self.hb_gradient.assign(tf.zeros([self.hidden.units]))
-                self.partial_hb_update = bias_regularizer(self.hb_gradient,
-                                                          hidden_bias_update) if bias_regularizer is not None \
-                    else self.hb_gradient.assign_add(hidden_bias_update)
-
+                self.partial_hb_update = self.hb_gradient.assign_add(hidden_bias_update)
                 self.update_hb = self.hidden.bias.assign_add(tf.div(self.hb_gradient, self.batch_size))
             if self.visible.use_bias:
                 self.vb_gradient = tf.Variable(tf.zeros([self.visible.units]), name="gradient_vb")
                 self.reset_vb_gradient = self.vb_gradient.assign(tf.zeros([self.visible.units]))
-                self.partial_vb_update = bias_regularizer(self.vb_gradient,
-                                                          visible_bias_update) if bias_regularizer is not None \
-                    else self.vb_gradient.assign_add(visible_bias_update)
+                self.partial_vb_update = self.vb_gradient.assign_add(visible_bias_update)
                 self.update_vb = self.visible.bias.assign_add(tf.div(self.vb_gradient, self.batch_size))
 
         else:
-            self.update = kernel_regularizer(self.W,
-                                             weight_update) if kernel_regularizer is not None else self.W.assign_add(
-                weight_update)
+            self.update = self.W.assign_add(weight_update)
             if self.hidden.use_bias:
-                self.update_hb = bias_regularizer(self.W, hidden_bias_update) if bias_regularizer is not None \
-                    else self.hidden.bias.assign_add(hidden_bias_update)
+                self.update_hb = self.hidden.bias.assign_add(hidden_bias_update)
             if self.visible.use_bias:
-                self.update_vb = bias_regularizer(self.W, visible_bias_update) if bias_regularizer is not None \
-                    else self.visible.bias.assign_add(visible_bias_update)
+                self.update_vb = self.visible.bias.assign_add(visible_bias_update)
+
+        if kernel_regularizer:
+            self.kernel_regularizer = kernel_regularizer(self, self.W)
+        else:
+            self.kernel_regularizer = None
+
+        if bias_regularizer is not None:
+            self.visible_bias_regularizer = bias_regularizer(self, self.visible.bias)
+            self.hidden_bias_regularizer = bias_regularizer(self, self.hidden.bias)
+        else:
+            self.visible_bias_regularizer = None
+            self.hidden_bias_regularizer = None
+
 
         self.cost = free_energy
         self.session.run(tf.global_variables_initializer())
@@ -285,15 +334,23 @@ class RBMModel(object):
             if self.hidden.use_bias:
                 session_run.append(self.update_hb)
 
+        if self.kernel_regularizer is not None:
+            session_run.append(self.kernel_regularizer)
+
+        if self.visible_bias_regularizer is not None:
+            session_run.append(self.visible_bias_regularizer)
+
+        if self.hidden_bias_regularizer is not None:
+            session_run.append(self.hidden_bias_regularizer)
+
         samples_num = len(x)
         index_array = np.arange(samples_num)
 
         batches_num = int(len(x) / batch_size) + (1 if len(x) % batch_size > 0 else 0)
 
-        free_energy = 0
         for j in range(nb_epoch):
             if verbose > 0:
-                self.log("Epoch {}/{}, free energy {}", j + 1, nb_epoch, free_energy)
+                self.log("Epoch {}/{}", j + 1, nb_epoch)
 
             if shuffle:
                 np.random.shuffle(index_array)
@@ -323,10 +380,12 @@ class RBMModel(object):
                     free_energy = self.session.run(session_run, feed_dict={self.input: batch})[1]
 
                 if verbose == 1:
-                    print('{}/{} free energy: {}'.format(batch_indices[1], len(x), free_energy))
+                    self.log('{}/{} free energy: {}'.format(batch_indices[1], len(x), free_energy))
+            if verbose > 0:
+                self.log('Epoch complete, last free energy {}'.format(free_energy))
 
         if verbose > 0:
-            print('Fitting completed')
+            self.log('Fitting completed')
 
     def generate(self, x, n=1, sampled=None):
         """

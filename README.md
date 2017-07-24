@@ -1,6 +1,6 @@
 # boltzmann
 Simple Restricted Boltzmann Machine implementation with TensorFlow.
-Implementation supports sigmoid, relu and linear visible/hidden units, l1/l2 normalization and contrastive divergence learning.
+Implementation supports sigmoid, relu and linear visible/hidden units, l1/l2/sparsity regularization and contrastive divergence learning with momentum.
 
 
 
