@@ -2,91 +2,48 @@ import tensorflow as tf
 import numpy as np
 import collections
 
-GibbsSample = collections.namedtuple('GibbsSample', 'visible hidden')
-GibbsChain = collections.namedtuple('GibbsChain', 'start end')
-CostUpdate = collections.namedtuple('CostUpdate', 'energy weight_update visible_bias_update hidden_bias_update')
+from boltzmann.core import sample
 
 
-class CD(object):
-    def __init__(self, model, n=1, lr=0.1, momentum=None):
-        self.model = model
-        self.n = n
-        self.lr = lr
-        self.tensorArr = tf.TensorArray(tf.float32, 1, dynamic_size=True, infer_shape=False)
+class LatentVariablesModel(object):
 
-        self.momentum = momentum
-        if momentum:
-            self.weight_velocity = None
-            self.vb_velocity = None
-            self.hb_velocity = None
+    def __init__(self):
+        self.session = None
 
+    def _hidden_state(self, visible_state):
+        pass
 
-    def get_cost(self, state_multi, visible_state, hidden_state):
-        free_energy = tf.reduce_sum(
-            tf.reduce_mean(tf.multiply(state_multi, self.model.W), axis=0))
+    def _visible_state(self, hidden_state):
+        pass
 
-        if self.model.visible.use_bias:
-            if self.model.visible.probabilistic:
-                free_energy = tf.add(free_energy, tf.reduce_mean(
-                    tf.reduce_sum(tf.multiply(self.model.visible.bias, visible_state), axis=1)))
-            else:
-                v = visible_state - self.model.visible.bias
-                free_energy = tf.add(free_energy, - tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
+    def burn_in(self, visible_state=None, hidden_state=None, n=1):
+        assert n > 0, 'Number of steps to burn in should be greater than zero'
+        if hidden_state is None:
+            hidden_state = self._hidden_state(visible_state)
+        burned_in_hidden_state = hidden_state
+        for i in range(n):
+            burned_in_visible_state = self._hidden_state(burned_in_hidden_state)
+            burned_in_hidden_state = self._hidden_state(burned_in_visible_state)
+        return [burned_in_visible_state, burned_in_hidden_state]
 
-        if self.model.hidden.use_bias:
-            if self.model.visible.probabilistic:
-                free_energy = tf.add(free_energy, tf.reduce_mean(
-                    tf.reduce_sum(tf.multiply(self.model.hidden.bias, hidden_state), axis=1)))
-            else:
-                h = hidden_state - self.model.hidden.bias
-                free_energy = tf.add(free_energy, -tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
+    def hidden_state(self, visible_state):
+        return self._get_session().run(self._hidden_state(visible_state))
 
-        return -free_energy
+    def visible_state(self, hidden_state):
+        return self._get_session().run(self._visible_state(hidden_state))
 
-    def multiply_states(self, visible, hidden):
-        return tf.matmul(tf.expand_dims(visible, 2),
-                         tf.expand_dims(hidden, 1))
+    def __call__(self, input_state, **kwargs):
+        return self.visible_state(self._hidden_state(input_state))
 
-    def get_velocity(self, previous, g):
-        return g if previous is None else previous * self.momentum + g
+    def _get_session(self):
+        return self.session
 
-    def get_cost_update(self, visible):
-        gibbs_chain = self.model.gibbs_sample(visible, n=self.n)
-        chain_start_multi = self.multiply_states(gibbs_chain.start.visible, gibbs_chain.start.hidden)
-        chain_end_multi = self.multiply_states(gibbs_chain.end.visible, gibbs_chain.end.hidden)
+    def _set_session(self, session):
+        self.session = session
 
-        energy = self.get_cost(chain_start_multi, gibbs_chain.start.visible, gibbs_chain.start.hidden)
-
-        weight_update = tf.reduce_mean(chain_start_multi - chain_end_multi, 0) * self.lr
-        visible_bias_update = tf.reduce_mean(gibbs_chain.start.visible - gibbs_chain.end.visible, 0) * self.lr
-        hidden_bias_update = tf.reduce_mean(gibbs_chain.start.hidden - gibbs_chain.end.hidden, 0) * self.lr
-        if self.momentum:
-            self.weight_velocity = self.get_velocity(self.weight_velocity, weight_update)
-            self.vb_velocity = self.get_velocity(self.vb_velocity, visible_bias_update)
-            self.hb_velocity = self.get_velocity(self.hb_velocity, hidden_bias_update)
-            return CostUpdate(
-                energy=energy,
-                weight_update=self.weight_velocity,
-                visible_bias_update=self.vb_velocity,
-                hidden_bias_update=self.hb_velocity)
-
-        else:
-            return CostUpdate(
-                energy=energy,
-                weight_update=weight_update,
-                visible_bias_update=visible_bias_update,
-                hidden_bias_update=hidden_bias_update)
-
-
-def cd(n=1, lr=0.1, momentum=None):
-    """
-    Creates contrastive divergence optimizer
-    :param lr: float, learning rate
-    :param n: int, number of Gibbs sampling steps
-    :return: contrastive divergence optimizer
-    """
-    return lambda model: CD(model, n=n, lr=lr, momentum=momentum)
-
+class EnrgyBasedModel(LatentVariablesModel):
+    def _energy(self):
+        pass
 
 class RBMLayer(object):
     activations = {'sigmoid': tf.nn.sigmoid, 'linear': None, 'relu': tf.nn.relu}
@@ -106,7 +63,7 @@ class RBMLayer(object):
         :param name: string, layer name
         :param sampled: boolean,
         """
-        self.probabilistic = False
+        self.gaussian = True
         self.units = units
         self.use_bias = use_bias
         self.default_sampled = sampled
@@ -117,7 +74,7 @@ class RBMLayer(object):
         if activation in self.activations:
             self.activation = self.activations[activation]
             if activation == 'sigmoid':
-                self.probabilistic = True
+                self.gaussian = False
         else:
             raise ValueError('Unknown activation identifier {}'.format(activation))
 
@@ -126,7 +83,7 @@ class RBMLayer(object):
     def call(self, input, weights, transpose_weights=False, sampled=None):
         sampled = self.default_sampled if sampled is None else sampled
 
-        if not self.probabilistic and sampled:
+        if not self.gaussian and sampled:
             raise ValueError('Sampling is available only for logistic units')
 
         kernel = tf.matmul(input, weights, transpose_b=transpose_weights)
@@ -135,68 +92,17 @@ class RBMLayer(object):
 
         output = kernel if self.activation is None else self.activation(kernel)
         if sampled:
-            output = self.sample(output)
+            output = sample(output)
 
         return output
 
-    def sample(self, probability):
-        shape = tf.shape(probability)
-        return tf.where(probability - tf.random_uniform(shape) > 0.0,
-                        tf.ones(shape), tf.zeros(shape))
+
 
     def get_bias(self):
         return self.session.run(self.bias)
 
 
-class Regularizer(object):
-    def __init__(self, l):
-        self.l = l
 
-    def __call__(self, model, learnable):
-        raise NotImplementedError
-
-
-class L2(Regularizer):
-    """
-    Creates L2 regularizer
-    :param l: regularization coefficient
-    :return:
-    """
-    def __init__(self, l):
-        super(L2, self).__init__(l)
-
-    def __call__(self, model, learnable):
-        return learnable.assign_add(- self.l * learnable)
-
-
-class L1(Regularizer):
-    """
-    Creates L1 regularizer
-    :param l: regularization coefficient
-    :return:
-    """
-    def __init__(self, l):
-        super(L1, self).__init__(l)
-
-    def __call__(self, model, learnable):
-        return learnable.assign(tf.where(tf.abs(learnable) > self.l, learnable - self.l * tf.sign(learnable),
-                                            tf.zeros(tf.shape(learnable))))
-
-
-class SparsityTarget(Regularizer):
-    def __init__(self, l, p):
-        """
-        Creates sparsity target regularizer
-        :param l: regularization coefficient
-        :param p: sparsity target
-        :return:
-        """
-        super(SparsityTarget, self).__init__(l)
-        self.p = p
-
-    def __call__(self, model, learnable):
-        q = tf.reduce_mean(model.hidden.call(model.input, model.W), 0)
-        return learnable.assign(tf.add(learnable, self.l * (self.p-q)))
 
 
 
@@ -220,17 +126,49 @@ class RBMModel(object):
             self.W = tf.Variable(weights,
                                  name="weights")
 
-    def gibbs_sample(self, x, n=1, sampled=None):
-        visible = x
-        hidden = self.hidden.call(visible, self.W, sampled=sampled)
-        start = GibbsSample(visible=visible, hidden=hidden)
-        for i in range(n):
-            visible = self.visible.call(hidden, self.W, transpose_weights=True,
-                                        sampled=sampled)
-            hidden = self.hidden.call(visible, self.W, sampled=sampled)
+    def energy(self, visible_state, hidden_state):
+        energy = -tf.reduce_sum(
+            tf.reduce_mean(tf.multiply(tf.matmul(visible_state, self.W), hidden_state), axis=0))
 
-        end = GibbsSample(visible=visible, hidden=hidden)
-        return GibbsChain(start=start, end=end)
+        if self.visible.use_bias:
+            if self.visible.gaussian:
+                v = visible_state - self.visible.bias
+                free_energy = tf.add(energy,  tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
+            else:
+                free_energy = tf.add(energy, -tf.reduce_mean(
+                    tf.reduce_sum(tf.multiply(self.visible.bias, visible_state), axis=1)))
+
+        if self.hidden.use_bias:
+            if self.hidden.gaussian:
+                h = hidden_state - self.hidden.bias
+                free_energy = tf.add(energy, tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
+            else:
+                free_energy = tf.add(energy, -tf.reduce_mean(
+                    tf.reduce_sum(tf.multiply(self.hidden.bias, hidden_state), axis=1)))
+
+        return energy
+
+    #f gibbs_sample(self, x, n=1, sampled=None):
+    #  visible = x
+    #     hidden = self.hidden.call(visible, self.W, sampled=sampled)
+    #     start = GibbsSample(visible=visible, hidden=hidden)
+    #     for i in range(n):
+    #         visible = self.visible.call(hidden, self.W, transpose_weights=True,
+    #                                     sampled=sampled)
+    #         hidden = self.hidden.call(visible, self.W, sampled=sampled)
+    #
+    #     end = GibbsSample(visible=visible, hidden=hidden)
+    #     return GibbsChain(start=start, end=end)
+
+    def burn_in(self, visible_state=None, hidden_state=None, n=1):
+        assert n > 0, 'Number of steps to burn in should be greater than zero'
+        if hidden_state is None:
+            hidden_state = self.hidden.call(visible_state)
+        burned_in_hidden_state = hidden_state
+        for i in range(n):
+            burned_in_visible_state = self.visible.call(burned_in_hidden_state)
+            burned_in_hidden_state = self.hidden.call(burned_in_visible_state)
+        return [burned_in_visible_state, burned_in_hidden_state]
 
     def get_weights(self):
         """
@@ -398,7 +336,7 @@ class RBMModel(object):
         visible = self.gibbs_sample(self.input, n, sampled=sampled).end.visible
         return self.session.run(visible, feed_dict={self.input: x})
 
-    def hidden_state(self, x, n=1, sampled=None):
+    def hidden_state(self, x, sampled=None):
         """
         Returns hidden state after applying n Gibbs sampling steps
         :param x: 2d-array, visible unit states
