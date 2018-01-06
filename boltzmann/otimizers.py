@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-from boltzmann.core import CostUpdate
+from boltzmann.core import CostUpdate, sample
 
 
 class CD(object):
@@ -48,37 +48,70 @@ class CD(object):
 
     def get_cost_update(self, sample):
         positive_visible_state = sample
-        positive_hidden_state = self.model.hidden.call(positive_visible_state)
+        positive_hidden_state = self.model.hidden.call(positive_visible_state, self.model.W)
         negative_visible_state, negative_hidden_state = self.sample_negative(positive_visible_state, positive_hidden_state)
-        loss = self.model.energy()
-        negative_grad = self.multiply_states(negative_sample.end.visible, negative_sample.end.hidden)
+        energy = self.model.energy(positive_visible_state, positive_hidden_state)
+        loss = energy - self.model.energy(negative_visible_state, negative_hidden_state)
 
-        energy = self.get_cost(positive_grad, negative_sample.start.visible, negative_sample.start.hidden)
-
-        weight_update = tf.reduce_mean(positive_grad - negative_grad, 0) * self.lr
-        visible_bias_update = tf.reduce_mean(negative_sample.start.visible - negative_sample.end.visible, 0) * self.lr
-        hidden_bias_update = tf.reduce_mean(negative_sample.start.hidden - negative_sample.end.hidden, 0) * self.lr
         if self.momentum:
-            self.weight_velocity = self.get_velocity(self.weight_velocity, weight_update)
-            self.vb_velocity = self.get_velocity(self.vb_velocity, visible_bias_update)
-            self.hb_velocity = self.get_velocity(self.hb_velocity, hidden_bias_update)
-            return CostUpdate(
-                energy=energy,
-                weight_update=self.weight_velocity,
-                visible_bias_update=self.vb_velocity,
-                hidden_bias_update=self.hb_velocity)
-
+            self.optimizer = tf.train.MomentumOptimizer(self.lr, self.momentum)
         else:
-            return CostUpdate(
-                energy=energy,
-                weight_update=weight_update,
-                visible_bias_update=visible_bias_update,
-                hidden_bias_update=hidden_bias_update)
+            self.optimizer = tf.train.GradientDescentOptimizer(self.lr)
 
-    def sample_negative(self, visible):
-        return self.model.burn_in(visible, n=self.n)
+        grads_and_vars = self.optimizer.compute_gradients(loss, [self.model.W, self.model.hidden.bias, self.model.visible.bias])
+        update = self.optimizer.apply_gradients(grads_and_vars=grads_and_vars)
+        return [energy, update]
 
 
+        # negative_grad = self.multiply_states(negative_sample.end.visible, negative_sample.end.hidden)
+        #
+        # energy = self.get_cost(positive_grad, negative_sample.start.visible, negative_sample.start.hidden)
+        #
+        # weight_update = tf.reduce_mean(positive_grad - negative_grad, 0) * self.lr
+        # visible_bias_update = tf.reduce_mean(negative_sample.start.visible - negative_sample.end.visible, 0) * self.lr
+        # hidden_bias_update = tf.reduce_mean(negative_sample.start.hidden - negative_sample.end.hidden, 0) * self.lr
+        # if self.momentum:
+        #     self.weight_velocity = self.get_velocity(self.weight_velocity, weight_update)
+        #     self.vb_velocity = self.get_velocity(self.vb_velocity, visible_bias_update)
+        #     self.hb_velocity = self.get_velocity(self.hb_velocity, hidden_bias_update)
+        #     return CostUpdate(
+        #         energy=energy,
+        #         weight_update=self.weight_velocity,
+        #         visible_bias_update=self.vb_velocity,
+        #         hidden_bias_update=self.hb_velocity)
+        #
+        # else:
+        #     return CostUpdate(
+        #         energy=energy,
+        #         weight_update=weight_update,
+        #         visible_bias_update=visible_bias_update,
+        #         hidden_bias_update=hidden_bias_update)
+
+    def sample_negative(self, visible, hidden):
+        return self.model.burn_in(visible, hidden_state=hidden, n=self.n)
+
+
+class PCD(CD):
+    def __init__(self, model, n=1, lr=0.1, momentum=None):
+        self.visible_negative = None
+        self.hidden_negative = None
+
+        super(PCD, self).__init__(model, n, lr, momentum)
+
+    def sample_negative(self, visible, hidden):
+        if self.visible_negative is None:
+            if self.model.visible.gaussian:
+                # self.visible_negative = tf.get_variable("visible_negative", shape=[tf.shape(self.model.input)],
+                #                                         initializer=tf.random_normal_initializer(), trainable=False,
+                #                                         validate_shape=False)
+                self.visible_negative = tf.random_normal(shape=(tf.shape(visible)))
+            else:
+                self.visible_negative =sample(tf.random_uniform(tf.shape(self.model.input)))
+
+        [visible_negative, hidden_negative] = self.model.burn_in(self.visible_negative, hidden_state=self.hidden_negative, n=self.n)
+        self.visible_negative = visible_negative
+        self.hidden_negative = hidden_negative
+        return  [visible_negative, hidden_negative]
 
 def cd(n=1, lr=0.1, momentum=None):
     """
@@ -88,3 +121,12 @@ def cd(n=1, lr=0.1, momentum=None):
     :return: contrastive divergence optimizer
     """
     return lambda model: CD(model, n=n, lr=lr, momentum=momentum)
+
+def pcd(n=1, lr=0.1, momentum=None):
+    """
+    Creates contrastive divergence optimizer
+    :param lr: float, learning rate
+    :param n: int, number of Gibbs sampling steps
+    :return: contrastive divergence optimizer
+    """
+    return lambda model: PCD(model, n=n, lr=lr, momentum=momentum)

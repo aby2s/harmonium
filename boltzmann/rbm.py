@@ -83,7 +83,7 @@ class RBMLayer(object):
     def call(self, input, weights, transpose_weights=False, sampled=None):
         sampled = self.default_sampled if sampled is None else sampled
 
-        if not self.gaussian and sampled:
+        if self.gaussian and sampled:
             raise ValueError('Sampling is available only for logistic units')
 
         kernel = tf.matmul(input, weights, transpose_b=transpose_weights)
@@ -126,6 +126,9 @@ class RBMModel(object):
             self.W = tf.Variable(weights,
                                  name="weights")
 
+        self.batch_size = tf.placeholder(tf.int32, [], name='batch_size')
+        self.input = tf.placeholder("float", [None, self.visible.units], name='input')
+
     def energy(self, visible_state, hidden_state):
         energy = -tf.reduce_sum(
             tf.reduce_mean(tf.multiply(tf.matmul(visible_state, self.W), hidden_state), axis=0))
@@ -133,17 +136,17 @@ class RBMModel(object):
         if self.visible.use_bias:
             if self.visible.gaussian:
                 v = visible_state - self.visible.bias
-                free_energy = tf.add(energy,  tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
+                energy = tf.add(energy,  tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
             else:
-                free_energy = tf.add(energy, -tf.reduce_mean(
+                energy = tf.add(energy, -tf.reduce_mean(
                     tf.reduce_sum(tf.multiply(self.visible.bias, visible_state), axis=1)))
 
         if self.hidden.use_bias:
             if self.hidden.gaussian:
                 h = hidden_state - self.hidden.bias
-                free_energy = tf.add(energy, tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
+                energy = tf.add(energy, tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
             else:
-                free_energy = tf.add(energy, -tf.reduce_mean(
+                energy = tf.add(energy, -tf.reduce_mean(
                     tf.reduce_sum(tf.multiply(self.hidden.bias, hidden_state), axis=1)))
 
         return energy
@@ -160,14 +163,15 @@ class RBMModel(object):
     #     end = GibbsSample(visible=visible, hidden=hidden)
     #     return GibbsChain(start=start, end=end)
 
-    def burn_in(self, visible_state=None, hidden_state=None, n=1):
+    def burn_in(self, visible_state=None, hidden_state=None, n=1, sampled=None):
         assert n > 0, 'Number of steps to burn in should be greater than zero'
         if hidden_state is None:
-            hidden_state = self.hidden.call(visible_state)
+            hidden_state = self.hidden.call(visible_state,  self.W, sampled=sampled)
         burned_in_hidden_state = hidden_state
         for i in range(n):
-            burned_in_visible_state = self.visible.call(burned_in_hidden_state)
-            burned_in_hidden_state = self.hidden.call(burned_in_visible_state)
+            burned_in_visible_state = self.visible.call(burned_in_hidden_state, self.W, transpose_weights=True,
+                                                        sampled=sampled)
+            burned_in_hidden_state = self.hidden.call(burned_in_visible_state, self.W, sampled=sampled)
         return [burned_in_visible_state, burned_in_hidden_state]
 
     def get_weights(self):
@@ -177,7 +181,7 @@ class RBMModel(object):
         return self.session.run(self.W)
 
     def compile(self, optimizer,
-                metrics=None, config=None, unstack=False, kernel_regularizer=None, bias_regularizer=None):
+                metrics=None, config=None, kernel_regularizer=None, bias_regularizer=None):
         """
         :param optimizer: optimizer instance, supports only cd instance
         :param metrics: unsupported
@@ -187,48 +191,25 @@ class RBMModel(object):
         :param kernel_regularizer: available l1/l2 regularizers or None
         :param bias_regularizer: available l1/l2 regularizers or None
         """
-        self.optimizer = optimizer(self)
         if config is not None:
             self.session = tf.Session()
         else:
             self.session = tf.Session(config=config)
 
-        self.unstack = unstack
         self.visible.session = self.session
         self.hidden.session = self.session
 
-        self.input = tf.placeholder("float", [None, self.visible.units], name='input')
-        [free_energy, weight_update, visible_bias_update, hidden_bias_update] = self.optimizer.get_cost_update(
+
+
+
+
+        self.optimizer = optimizer(self)
+
+        [energy, update] = self.optimizer.get_cost_update(
             self.input)
 
-        # weight_update = tf.add(weight_update, kernel_regularizer(self.W))
-
-
-
-        if unstack:
-            self.batch_size = tf.placeholder("float", [], name='batch_size')
-            self.w_gradient = tf.Variable(tf.zeros([self.visible.units, self.hidden.units]), name="gradient")
-            self.reset_w_gradient = self.w_gradient.assign(tf.zeros([self.visible.units, self.hidden.units]))
-            self.partial_w_update = self.w_gradient.assign_add(weight_update)
-            self.update = self.W.assign_add(tf.div(self.w_gradient, self.batch_size))
-
-            if self.hidden.use_bias:
-                self.hb_gradient = tf.Variable(tf.zeros([self.hidden.units]), name="gradient_hb")
-                self.reset_hb_gradient = self.hb_gradient.assign(tf.zeros([self.hidden.units]))
-                self.partial_hb_update = self.hb_gradient.assign_add(hidden_bias_update)
-                self.update_hb = self.hidden.bias.assign_add(tf.div(self.hb_gradient, self.batch_size))
-            if self.visible.use_bias:
-                self.vb_gradient = tf.Variable(tf.zeros([self.visible.units]), name="gradient_vb")
-                self.reset_vb_gradient = self.vb_gradient.assign(tf.zeros([self.visible.units]))
-                self.partial_vb_update = self.vb_gradient.assign_add(visible_bias_update)
-                self.update_vb = self.visible.bias.assign_add(tf.div(self.vb_gradient, self.batch_size))
-
-        else:
-            self.update = self.W.assign_add(weight_update)
-            if self.hidden.use_bias:
-                self.update_hb = self.hidden.bias.assign_add(hidden_bias_update)
-            if self.visible.use_bias:
-                self.update_vb = self.visible.bias.assign_add(visible_bias_update)
+        self.cost = energy
+        self.update = update
 
         if kernel_regularizer:
             self.kernel_regularizer = kernel_regularizer(self, self.W)
@@ -243,7 +224,6 @@ class RBMModel(object):
             self.hidden_bias_regularizer = None
 
 
-        self.cost = free_energy
         self.session.run(tf.global_variables_initializer())
 
     def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=True):
@@ -259,18 +239,8 @@ class RBMModel(object):
         if verbose > 0:
             print("Fitting RBM on {} samples with {} batch size and {} epochs".format(len(x), batch_size, nb_epoch))
 
-        if self.unstack:
-            session_run = [self.partial_w_update, self.cost]
-            if self.visible.use_bias:
-                session_run.append(self.partial_vb_update)
-            if self.hidden.use_bias:
-                session_run.append(self.partial_hb_update)
-        else:
-            session_run = [self.update, self.cost]
-            if self.visible.use_bias:
-                session_run.append(self.update_vb)
-            if self.hidden.use_bias:
-                session_run.append(self.update_hb)
+
+        session_run = [self.cost, self.update]
 
         if self.kernel_regularizer is not None:
             session_run.append(self.kernel_regularizer)
@@ -296,26 +266,8 @@ class RBMModel(object):
             batches = [(i * batch_size, min(samples_num, (i + 1) * batch_size)) for i in range(0, batches_num)]
             free_energy = 0
             for batch_indices in batches:
-                if self.unstack:
-                    for index in range(batch_indices[0], batch_indices[1]):
-                        batch = x[index]
-                        partial_cost = self.session.run(session_run, feed_dict={self.input: [batch]})[1]
-                        free_energy += partial_cost
-                    free_energy /= batch_size
-                    self.session.run(self.update,
-                                     feed_dict={self.batch_size: float(batch_indices[1] - batch_indices[0])})
-                    self.session.run(self.reset_w_gradient)
-                    if self.hidden.use_bias:
-                        self.session.run(self.update_hb,
-                                         feed_dict={self.batch_size: float(batch_indices[1] - batch_indices[0])})
-                        self.session.run(self.reset_hb_gradient)
-                    if self.visible.use_bias:
-                        self.session.run(self.update_vb,
-                                         feed_dict={self.batch_size: float(batch_indices[1] - batch_indices[0])})
-                        self.session.run(self.reset_vb_gradient)
-                else:
-                    batch = x[index_array[batch_indices[0]:batch_indices[1]]]
-                    free_energy = self.session.run(session_run, feed_dict={self.input: batch})[1]
+                batch = x[index_array[batch_indices[0]:batch_indices[1]]]
+                free_energy = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})[0]
 
                 if verbose == 1:
                     self.log('{}/{} free energy: {}'.format(batch_indices[1], len(x), free_energy))
@@ -333,7 +285,7 @@ class RBMModel(object):
         :param sampled: boolean, if true, do sampling from units states
         :return: 2d-array, generated visible state
         """
-        visible = self.gibbs_sample(self.input, n, sampled=sampled).end.visible
+        visible, _ = self.burn_in(self.input, n=n, sampled=sampled)
         return self.session.run(visible, feed_dict={self.input: x})
 
     def hidden_state(self, x, sampled=None):
