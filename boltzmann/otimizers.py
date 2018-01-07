@@ -58,7 +58,13 @@ class CD(object):
         else:
             self.optimizer = tf.train.GradientDescentOptimizer(self.lr)
 
-        grads_and_vars = self.optimizer.compute_gradients(loss, [self.model.W, self.model.hidden.bias, self.model.visible.bias])
+        vars = [self.model.W]
+        if self.model.hidden.use_bias:
+            vars.append(self.model.hidden.bias)
+
+        if self.model.visible.use_bias:
+            vars.append(self.model.visible.bias)
+        grads_and_vars = self.optimizer.compute_gradients(loss, vars)
         update = self.optimizer.apply_gradients(grads_and_vars=grads_and_vars)
         return [energy, update]
 
