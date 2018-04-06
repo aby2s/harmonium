@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 
-from boltzmann.otimizers import cd, pcd
+from boltzmann.optimizers import cd, pcd
 from boltzmann.rbm import RBMModel, RBMLayer
 from boltzmann.rbm_utils import save_weights, save_hidden_state
 import tensorflow as tf
