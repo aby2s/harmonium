@@ -1,52 +1,15 @@
 import tensorflow as tf
 import numpy as np
 import collections
+import pickle
 
-from boltzmann.core import sample
+from boltzmann.core import sample_bernoulli, sample_gaussian
 
-
-class LatentVariablesModel(object):
-
-    def __init__(self):
-        self.session = None
-
-    def _hidden_state(self, visible_state):
-        pass
-
-    def _visible_state(self, hidden_state):
-        pass
-
-    def burn_in(self, visible_state=None, hidden_state=None, n=1):
-        assert n > 0, 'Number of steps to burn in should be greater than zero'
-        if hidden_state is None:
-            hidden_state = self._hidden_state(visible_state)
-        burned_in_hidden_state = hidden_state
-        for i in range(n):
-            burned_in_visible_state = self._hidden_state(burned_in_hidden_state)
-            burned_in_hidden_state = self._hidden_state(burned_in_visible_state)
-        return [burned_in_visible_state, burned_in_hidden_state]
-
-    def hidden_state(self, visible_state):
-        return self._get_session().run(self._hidden_state(visible_state))
-
-    def visible_state(self, hidden_state):
-        return self._get_session().run(self._visible_state(hidden_state))
-
-    def __call__(self, input_state, **kwargs):
-        return self.visible_state(self._hidden_state(input_state))
-
-    def _get_session(self):
-        return self.session
-
-    def _set_session(self, session):
-        self.session = session
-
-class EnrgyBasedModel(LatentVariablesModel):
-    def _energy(self):
-        pass
 
 class RBMLayer(object):
     activations = {'sigmoid': tf.nn.sigmoid, 'linear': None, 'relu': tf.nn.relu}
+    #samplers = {'sigmoid': sample_bernoulli, 'linear': sample_gaussian, 'relu': lambda x: sample_gaussian(relu=True)}
+    samplers = {'sigmoid': sample_bernoulli, 'linear': lambda x: x, 'relu': lambda x: x}
 
     def __init__(self, units,
                  activation=None,
@@ -63,7 +26,6 @@ class RBMLayer(object):
         :param name: string, layer name
         :param sampled: boolean,
         """
-        self.gaussian = True
         self.units = units
         self.use_bias = use_bias
         self.default_sampled = sampled
@@ -71,10 +33,11 @@ class RBMLayer(object):
             self.bias = tf.Variable(tf.zeros([units]) if bias is None else bias,
                                     name=None if name is None else name + '_bias')
 
+
         if activation in self.activations:
             self.activation = self.activations[activation]
-            if activation == 'sigmoid':
-                self.gaussian = False
+            self.sampler = self.samplers[activation]
+            self.binary = activation == "sigmoid"
         else:
             raise ValueError('Unknown activation identifier {}'.format(activation))
 
@@ -83,17 +46,16 @@ class RBMLayer(object):
     def call(self, input, weights, transpose_weights=False, sampled=None):
         sampled = self.default_sampled if sampled is None else sampled
 
-        if self.gaussian and sampled:
-            raise ValueError('Sampling is available only for logistic units')
-
         kernel = tf.matmul(input, weights, transpose_b=transpose_weights)
         if self.use_bias:
             kernel = tf.add(kernel, self.bias)
 
+        return self.nonlinearity(kernel, sampled)
+
+    def nonlinearity(self, kernel, sampled):
         output = kernel if self.activation is None else self.activation(kernel)
         if sampled:
-            output = sample(output)
-
+            output = self.sampler(output)
         return output
 
 
@@ -134,34 +96,23 @@ class RBMModel(object):
             tf.reduce_mean(tf.multiply(tf.matmul(visible_state, self.W), hidden_state), axis=0))
 
         if self.visible.use_bias:
-            if self.visible.gaussian:
-                v = visible_state - self.visible.bias
-                energy = tf.add(energy,  tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
-            else:
+            if self.visible.binary:
                 energy = tf.add(energy, -tf.reduce_mean(
                     tf.reduce_sum(tf.multiply(self.visible.bias, visible_state), axis=1)))
+            else:
+                v = visible_state - self.visible.bias
+                energy = tf.add(energy,  tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
+
 
         if self.hidden.use_bias:
-            if self.hidden.gaussian:
-                h = hidden_state - self.hidden.bias
-                energy = tf.add(energy, tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
-            else:
+            if self.hidden.binary:
                 energy = tf.add(energy, -tf.reduce_mean(
                     tf.reduce_sum(tf.multiply(self.hidden.bias, hidden_state), axis=1)))
+            else:
+                h = hidden_state - self.hidden.bias
+                energy = tf.add(energy, tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
 
         return energy
-
-    #f gibbs_sample(self, x, n=1, sampled=None):
-    #  visible = x
-    #     hidden = self.hidden.call(visible, self.W, sampled=sampled)
-    #     start = GibbsSample(visible=visible, hidden=hidden)
-    #     for i in range(n):
-    #         visible = self.visible.call(hidden, self.W, transpose_weights=True,
-    #                                     sampled=sampled)
-    #         hidden = self.hidden.call(visible, self.W, sampled=sampled)
-    #
-    #     end = GibbsSample(visible=visible, hidden=hidden)
-    #     return GibbsChain(start=start, end=end)
 
     def burn_in(self, visible_state=None, hidden_state=None, n=1, sampled=None):
         assert n > 0, 'Number of steps to burn in should be greater than zero'
@@ -240,16 +191,20 @@ class RBMModel(object):
             print("Fitting RBM on {} samples with {} batch size and {} epochs".format(len(x), batch_size, nb_epoch))
 
 
-        session_run = [self.cost, self.update]
+        session_run = [self.update]
 
+        debug = [self.W, self.hidden.bias, self.visible.bias] + self.optimizer.states + [x[0] for x in self.optimizer.grads_and_vars] + [self.cost]
+        session_run += debug
+
+        regularizers = []
         if self.kernel_regularizer is not None:
-            session_run.append(self.kernel_regularizer)
+            regularizers.append(self.kernel_regularizer)
 
         if self.visible_bias_regularizer is not None:
-            session_run.append(self.visible_bias_regularizer)
+            regularizers.append(self.visible_bias_regularizer)
 
         if self.hidden_bias_regularizer is not None:
-            session_run.append(self.hidden_bias_regularizer)
+            regularizers.append(self.hidden_bias_regularizer)
 
         samples_num = len(x)
         index_array = np.arange(samples_num)
@@ -267,7 +222,15 @@ class RBMModel(object):
             free_energy = 0
             for batch_indices in batches:
                 batch = x[index_array[batch_indices[0]:batch_indices[1]]]
-                free_energy = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})[0]
+                res = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
+                res1 = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})[1:]
+                if len(regularizers) > 0:
+                    self.session.run(regularizers, feed_dict={self.input: batch, self.batch_size: batch_size})
+
+                res2 = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
+                with open('reses.pickle', 'wb') as f:
+                    pickle.dump([res, res1, res2], f)
+                free_energy = res[0]
 
                 if verbose == 1:
                     self.log('{}/{} free energy: {}'.format(batch_indices[1], len(x), free_energy))

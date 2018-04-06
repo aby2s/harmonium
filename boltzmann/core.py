@@ -1,11 +1,12 @@
 import tensorflow as tf
 import collections
 
-GibbsSample = collections.namedtuple('GibbsSample', 'visible hidden')
-GibbsChain = collections.namedtuple('GibbsChain', 'start end')
-CostUpdate = collections.namedtuple('CostUpdate', 'energy weight_update visible_bias_update hidden_bias_update')
+def sample_bernoulli(probability):
+    # return tf.where(probability - tf.random_uniform(shape) > 0.0,
+    #                 tf.ones(shape), tf.zeros(shape))
+    return tf.where(probability > 0.5,
+                    tf.ones_like(probability), tf.zeros_like(probability))
 
-def sample(probability):
-    shape = tf.shape(probability)
-    return tf.where(probability - tf.random_uniform(shape) > 0.0,
-                    tf.ones(shape), tf.zeros(shape))
+def sample_gaussian(mean, stddev=1.0, relu=False):
+    return tf.nn.relu(mean+tf.random_normal(tf.shape(mean), stddev=stddev))
+

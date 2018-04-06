@@ -1,14 +1,14 @@
 import tensorflow as tf
 
-from boltzmann.core import CostUpdate, sample
-
-
 class CD(object):
     def __init__(self, model, n=1, lr=0.1, momentum=None):
         self.model = model
         self.n = n
         self.lr = lr
         self.tensorArr = tf.TensorArray(tf.float32, 1, dynamic_size=True, infer_shape=False)
+        self.grads_and_vars = None
+
+        self.states = []
 
         self.momentum = momentum
         if momentum:
@@ -47,8 +47,8 @@ class CD(object):
     #     return g if previous is None else previous * self.momentum + g
 
     def get_cost_update(self, sample):
-        positive_visible_state = sample
-        positive_hidden_state = self.model.hidden.call(positive_visible_state, self.model.W)
+        positive_visible_state = tf.stop_gradient(sample)
+        positive_hidden_state = tf.stop_gradient(self.model.hidden.call(positive_visible_state, self.model.W))
         negative_visible_state, negative_hidden_state = self.sample_negative(positive_visible_state, positive_hidden_state)
         energy = self.model.energy(positive_visible_state, positive_hidden_state)
         loss = energy - self.model.energy(negative_visible_state, negative_hidden_state)
@@ -64,8 +64,10 @@ class CD(object):
 
         if self.model.visible.use_bias:
             vars.append(self.model.visible.bias)
-        grads_and_vars = self.optimizer.compute_gradients(loss, vars)
+        grads_and_vars = self.optimizer.compute_gradients(loss)
         update = self.optimizer.apply_gradients(grads_and_vars=grads_and_vars)
+        self.grads_and_vars = grads_and_vars
+        self.states = [positive_visible_state, positive_hidden_state, negative_visible_state, negative_hidden_state]
         return [energy, update]
 
 
@@ -106,18 +108,13 @@ class PCD(CD):
 
     def sample_negative(self, visible, hidden):
         if self.visible_negative is None:
-            if self.model.visible.gaussian:
-                # self.visible_negative = tf.get_variable("visible_negative", shape=[tf.shape(self.model.input)],
-                #                                         initializer=tf.random_normal_initializer(), trainable=False,
-                #                                         validate_shape=False)
-                self.visible_negative = tf.random_normal(shape=(tf.shape(visible)))
-            else:
-                self.visible_negative =sample(tf.random_uniform(tf.shape(self.model.input)))
+            self.visible_negative = self.model.hidden.nonlinearity(tf.random_normal(tf.shape(self.model.input)), sampled=True)
+
 
         [visible_negative, hidden_negative] = self.model.burn_in(self.visible_negative, hidden_state=self.hidden_negative, n=self.n)
         self.visible_negative = visible_negative
         self.hidden_negative = hidden_negative
-        return  [visible_negative, hidden_negative]
+        return  [tf.stop_gradient(visible_negative), tf.stop_gradient(hidden_negative)]
 
 def cd(n=1, lr=0.1, momentum=None):
     """
