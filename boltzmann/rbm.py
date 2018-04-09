@@ -92,8 +92,7 @@ class RBMModel(object):
         self.input = tf.placeholder("float", [None, self.visible.units], name='input')
 
     def energy(self, visible_state, hidden_state):
-        energy = -tf.reduce_sum(
-            tf.reduce_mean(tf.multiply(tf.matmul(visible_state, self.W), hidden_state), axis=0))
+        energy = -tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.matmul(visible_state, self.W), hidden_state), axis=0))
 
         if self.visible.use_bias:
             if self.visible.binary:
@@ -191,10 +190,11 @@ class RBMModel(object):
             print("Fitting RBM on {} samples with {} batch size and {} epochs".format(len(x), batch_size, nb_epoch))
 
 
-        session_run = [self.update]
-
-        debug = [self.W, self.hidden.bias, self.visible.bias] + self.optimizer.states + [x[0] for x in self.optimizer.grads_and_vars] + [self.cost]
-        session_run += debug
+        # session_run = [self.update]
+        #
+        # debug = [self.W, self.hidden.bias, self.visible.bias] + self.optimizer.states + [x[0] for x in self.optimizer.grads_and_vars] + [self.cost]
+        #session_run += debug
+        session_run = [self.update, self.cost]
 
         regularizers = []
         if self.kernel_regularizer is not None:
@@ -222,15 +222,15 @@ class RBMModel(object):
             free_energy = 0
             for batch_indices in batches:
                 batch = x[index_array[batch_indices[0]:batch_indices[1]]]
-                res = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
-                res1 = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})[1:]
+                #res = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
+                res = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})[1:]
                 if len(regularizers) > 0:
                     self.session.run(regularizers, feed_dict={self.input: batch, self.batch_size: batch_size})
 
-                res2 = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
-                with open('reses.pickle', 'wb') as f:
-                    pickle.dump([res, res1, res2], f)
-                free_energy = res[0]
+                #res2 = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
+  #              with open('reses.pickle', 'wb') as f:
+   #                 pickle.dump([res, res1, res2], f)
+                free_energy = res[-1]
 
                 if verbose == 1:
                     self.log('{}/{} free energy: {}'.format(batch_indices[1], len(x), free_energy))

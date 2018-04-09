@@ -51,7 +51,7 @@ class CD(object):
         positive_hidden_state = tf.stop_gradient(self.model.hidden.call(positive_visible_state, self.model.W))
         negative_visible_state, negative_hidden_state = self.sample_negative(positive_visible_state, positive_hidden_state)
         energy = self.model.energy(positive_visible_state, positive_hidden_state)
-        loss = energy - self.model.energy(negative_visible_state, negative_hidden_state)
+        loss = self.model.energy(negative_visible_state, negative_hidden_state) - energy
 
         if self.momentum:
             self.optimizer = tf.train.MomentumOptimizer(self.lr, self.momentum)
@@ -64,9 +64,10 @@ class CD(object):
 
         if self.model.visible.use_bias:
             vars.append(self.model.visible.bias)
-        grads_and_vars = self.optimizer.compute_gradients(loss)
-        update = self.optimizer.apply_gradients(grads_and_vars=grads_and_vars)
-        self.grads_and_vars = grads_and_vars
+        # grads_and_vars = self.optimizer.compute_gradients(loss)
+        # update = self.optimizer.apply_gradients(grads_and_vars=grads_and_vars)
+        update = self.optimizer.minimize(loss)
+        #self.grads_and_vars = grads_and_vars
         self.states = [positive_visible_state, positive_hidden_state, negative_visible_state, negative_hidden_state]
         return [energy, update]
 
