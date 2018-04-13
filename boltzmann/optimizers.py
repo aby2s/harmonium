@@ -5,16 +5,15 @@ class CD(object):
         self.model = model
         self.n = n
         self.lr = lr
-        self.tensorArr = tf.TensorArray(tf.float32, 1, dynamic_size=True, infer_shape=False)
-        self.grads_and_vars = None
+        self.trace_data = dict()
 
         self.states = []
 
         self.momentum = momentum
-        if momentum:
-            self.weight_velocity = None
-            self.vb_velocity = None
-            self.hb_velocity = None
+        # if momentum:
+        #     self.weight_velocity = None
+        #     self.vb_velocity = None
+        #     self.hb_velocity = None
 
 
     # def get_cost(self, state_multi, visible_state, hidden_state):
@@ -58,17 +57,26 @@ class CD(object):
         else:
             self.optimizer = tf.train.GradientDescentOptimizer(self.lr)
 
-        vars = [self.model.W]
-        if self.model.hidden.use_bias:
-            vars.append(self.model.hidden.bias)
+        # vars = [self.model.W]
+        # if self.model.hidden.use_bias:
+        #     vars.append(self.model.hidden.bias)
+        #
+        # if self.model.visible.use_bias:
+        #     vars.append(self.model.visible.bias)
+        grads = self.optimizer.compute_gradients(loss)
+        for g,v in grads:
+            self.trace_data["grad_{}".format(v.name)] = g
 
-        if self.model.visible.use_bias:
-            vars.append(self.model.visible.bias)
-        # grads_and_vars = self.optimizer.compute_gradients(loss)
-        # update = self.optimizer.apply_gradients(grads_and_vars=grads_and_vars)
-        update = self.optimizer.minimize(loss)
+
+        self.trace_data["positive_visible_state"] = positive_visible_state
+        self.trace_data["positive_hidden_state"] = positive_hidden_state
+        self.trace_data["negative_visible_state"] = negative_visible_state
+        self.trace_data["negative_hidden_state"] = negative_hidden_state
+        self.trace_data["global_step"] = tf.Variable(initial_value = 0)
+
+        update = self.optimizer.apply_gradients(grads, global_step = self.trace_data["global_step"])
+        # update = self.optimizer.minimize(loss)
         #self.grads_and_vars = grads_and_vars
-        self.states = [positive_visible_state, positive_hidden_state, negative_visible_state, negative_hidden_state]
         return [energy, update]
 
 

@@ -69,7 +69,7 @@ class RBMLayer(object):
 
 
 class RBMModel(object):
-    def __init__(self, visible, hidden, weights=None, weights_stddev=0.01):
+    def __init__(self, visible, hidden, weights=None, weights_stddev=0.01, name=None):
         """
         :param visible: RBMLayer, visible layer
         :param hidden: RBMLayer, hidden layer
@@ -79,6 +79,8 @@ class RBMModel(object):
         """
         self.hidden = hidden
         self.visible = visible
+
+        self.trace_data = list()
 
         if weights is None:
             self.W = tf.Variable(
@@ -130,6 +132,8 @@ class RBMModel(object):
         """
         return self.session.run(self.W)
 
+
+
     def compile(self, optimizer,
                 metrics=None, config=None, kernel_regularizer=None, bias_regularizer=None):
         """
@@ -176,7 +180,7 @@ class RBMModel(object):
 
         self.session.run(tf.global_variables_initializer())
 
-    def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=True):
+    def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=True, trace = False):
         """
         Do RBM fitting on provided training set
         :param x: 2d-array, training set
@@ -211,6 +215,11 @@ class RBMModel(object):
 
         batches_num = int(len(x) / batch_size) + (1 if len(x) % batch_size > 0 else 0)
 
+        if trace:
+            trace_data = {'weights': self.W, 'visible_bias': self.visible.bias, 'hidden_bias': self.hidden.bias}
+            trace_data.update(self.optimizer.trace_data)
+            trace_vars, trace_tensors = zip(*trace_data.items())
+
         for j in range(nb_epoch):
             if verbose > 0:
                 self.log("Epoch {}/{}", j + 1, nb_epoch)
@@ -222,6 +231,10 @@ class RBMModel(object):
             free_energy = 0
             for batch_indices in batches:
                 batch = x[index_array[batch_indices[0]:batch_indices[1]]]
+
+                if trace:
+                    trace_res = self.session.run(trace_tensors, feed_dict={self.input: batch, self.batch_size: batch_size})
+                    self.trace_data.append(dict(zip(trace_vars, trace_res)))
                 #res = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
                 res = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})[1:]
                 if len(regularizers) > 0:
