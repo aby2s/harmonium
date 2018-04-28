@@ -2,6 +2,7 @@ import tensorflow as tf
 import numpy as np
 import collections
 import pickle
+from tensorflow.python import debug as tf_debug
 
 from boltzmann.core import sample_bernoulli, sample_gaussian
 
@@ -43,17 +44,19 @@ class RBMLayer(object):
 
         self.session = None
 
+        self.name = name
+
     def call(self, input, weights, transpose_weights=False, sampled=None):
         sampled = self.default_sampled if sampled is None else sampled
 
-        kernel = tf.matmul(input, weights, transpose_b=transpose_weights)
+        kernel = tf.matmul(input, weights, transpose_b=transpose_weights, name='{}_kernel'.format(self.name))
         if self.use_bias:
             kernel = tf.add(kernel, self.bias)
 
         return self.nonlinearity(kernel, sampled)
 
     def nonlinearity(self, kernel, sampled):
-        output = kernel if self.activation is None else self.activation(kernel)
+        output = kernel if self.activation is None else self.activation(kernel, name='{}_activation'.format(self.name))
         if sampled:
             output = self.sampler(output)
         return output
@@ -69,7 +72,7 @@ class RBMLayer(object):
 
 
 class RBMModel(object):
-    def __init__(self, visible, hidden, weights=None, weights_stddev=0.01, name=None):
+    def __init__(self, visible, hidden, weights=None, weights_stddev=0.01, debug = None, name=None):
         """
         :param visible: RBMLayer, visible layer
         :param hidden: RBMLayer, hidden layer
@@ -84,8 +87,7 @@ class RBMModel(object):
 
         if weights is None:
             self.W = tf.Variable(
-                tf.random_normal([self.visible.units, self.hidden.units], mean=0.0, stddev=weights_stddev,
-                                 name="weights"))
+                tf.random_normal([self.visible.units, self.hidden.units], mean=0.0, stddev=weights_stddev), name='weights')
         else:
             self.W = tf.Variable(weights,
                                  name="weights")
@@ -93,13 +95,19 @@ class RBMModel(object):
         self.batch_size = tf.placeholder(tf.int32, [], name='batch_size')
         self.input = tf.placeholder("float", [None, self.visible.units], name='input')
 
-    def energy(self, visible_state, hidden_state):
-        energy = -tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.matmul(visible_state, self.W), hidden_state), axis=0))
+        self.debug = debug
+
+
+    def energy(self, visible_state, hidden_state, name=None):
+        visible_state = tf.stop_gradient(visible_state)
+        hidden_state = tf.stop_gradient(hidden_state)
+        energy = -tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.matmul(visible_state, self.W, name='visible-weights'), hidden_state, name='{}_weights-hidden'.format(name))
+                                               , axis=1, name='{}_sum-of-weights'.format(name)))
 
         if self.visible.use_bias:
             if self.visible.binary:
                 energy = tf.add(energy, -tf.reduce_mean(
-                    tf.reduce_sum(tf.multiply(self.visible.bias, visible_state), axis=1)))
+                    tf.reduce_sum(tf.multiply(self.visible.bias, visible_state, name='{}_visible-bias-energy'.format(name)), axis=1)))
             else:
                 v = visible_state - self.visible.bias
                 energy = tf.add(energy,  tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
@@ -108,7 +116,7 @@ class RBMModel(object):
         if self.hidden.use_bias:
             if self.hidden.binary:
                 energy = tf.add(energy, -tf.reduce_mean(
-                    tf.reduce_sum(tf.multiply(self.hidden.bias, hidden_state), axis=1)))
+                    tf.reduce_sum(tf.multiply(self.hidden.bias, hidden_state, name='{}_hidden-bias-energy'.format(name)), axis=1)))
             else:
                 h = hidden_state - self.hidden.bias
                 energy = tf.add(energy, tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
@@ -120,7 +128,7 @@ class RBMModel(object):
         if hidden_state is None:
             hidden_state = self.hidden.call(visible_state,  self.W, sampled=sampled)
         burned_in_hidden_state = hidden_state
-        for i in range(n):
+        for i in range(n+1):
             burned_in_visible_state = self.visible.call(burned_in_hidden_state, self.W, transpose_weights=True,
                                                         sampled=sampled)
             burned_in_hidden_state = self.hidden.call(burned_in_visible_state, self.W, sampled=sampled)
@@ -149,6 +157,15 @@ class RBMModel(object):
             self.session = tf.Session()
         else:
             self.session = tf.Session(config=config)
+
+        if self.debug == 'local':
+            self.session = tf_debug.LocalCLIDebugWrapperSession(self.session)
+        elif self.debug == 'tensorboard':
+            self.session = tf_debug.TensorBoardDebugWrapperSession(self.session)
+
+        #self.session = tf_debug.TensorBoardDebugWrapperSession(self.session, 'localhost:2333')
+
+        self.summary_writer = tf.summary.FileWriter('./summary', self.session.graph)
 
         self.visible.session = self.session
         self.hidden.session = self.session
@@ -236,7 +253,7 @@ class RBMModel(object):
                     trace_res = self.session.run(trace_tensors, feed_dict={self.input: batch, self.batch_size: batch_size})
                     self.trace_data.append(dict(zip(trace_vars, trace_res)))
                 #res = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
-                res = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})[1:]
+                res = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})
                 if len(regularizers) > 0:
                     self.session.run(regularizers, feed_dict={self.input: batch, self.batch_size: batch_size})
 

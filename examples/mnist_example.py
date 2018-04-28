@@ -53,11 +53,11 @@ n_visible = 784
 config = tf.ConfigProto()
 config.gpu_options.allocator_type = 'BFC'
 
-rbm = RBMModel(visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=True, sampled=False),
-               hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=False))
+rbm = RBMModel(visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=False, sampled=False, name='visible'),
+               hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=False, sampled=False, name='hidden'))#, debug='local')
 rbm.compile(cd(1, lr=1e-3))
 for i in range(10):
-    rbm.fit(train_set, batch_size=1, nb_epoch=1, verbose=2)
+    rbm.fit(train_set, batch_size=128, nb_epoch=1, verbose=2)
     weights = rbm.get_weights()
     save_weights('weights/weights{}.jpg'.format(i), weights, shape=(28, 28), tile=(10, 10), spacing=(1, 1))
     for j in range(5):
@@ -68,7 +68,7 @@ for i in range(10):
         save_weights('class_out/output{}.jpg'.format(j), batch_t.T, shape=(28, 28), tile=(20, 10),
                      spacing=(1, 1))
         save_hidden_state('class_out/hidden{}.jpg'.format(j), hidden_state)
-        bias = rbm.visible.get_bias()
+        bias = np.array([0])#rbm.visible.get_bias()
         print("RBM, epoch {}, GENERATE ERROR: {}, MAX WEIGHT: {}, MIN WEIGHT {}, MEDIAN WEIGHT {}, MAX BIAS {}, MIN BIAS {}, MEDIAN BIAS {}".
               format(i, mean_squared_error(batch, batch_t), np.max(weights), np.min(weights),
                      np.median(weights), np.max(bias), np.min(bias), np.median(bias)))

@@ -24,8 +24,8 @@ n_visible = 4
 config = tf.ConfigProto()
 config.gpu_options.allocator_type = 'BFC'
 
-rbm = RBMModel(visible=RBMLayer(activation='linear', units=n_visible, use_bias=True, sampled=False),
-               hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=True))
+rbm = RBMModel(visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=True, sampled=False, name='visible'),
+               hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=False, name='hidden'))
 rbm.compile(cd(1, lr=1e-3))#, kernel_regularizer=regularizers.SparsityTarget(0.01, 0.5), bias_regularizer=regularizers.L2(0.1))
 for i in range(1):
     rbm.fit(train_set, batch_size=2, nb_epoch=2, verbose=2, trace=True)

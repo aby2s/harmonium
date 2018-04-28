@@ -46,16 +46,17 @@ class CD(object):
     #     return g if previous is None else previous * self.momentum + g
 
     def get_cost_update(self, sample):
-        positive_visible_state = tf.stop_gradient(sample)
-        positive_hidden_state = tf.stop_gradient(self.model.hidden.call(positive_visible_state, self.model.W))
+        positive_visible_state = sample
+        positive_hidden_state = self.model.hidden.call(positive_visible_state, self.model.W)
         negative_visible_state, negative_hidden_state = self.sample_negative(positive_visible_state, positive_hidden_state)
-        energy = self.model.energy(positive_visible_state, positive_hidden_state)
-        loss = self.model.energy(negative_visible_state, negative_hidden_state) - energy
+        data_energy = self.model.energy(positive_visible_state, positive_hidden_state, name='data')
+        model_energy = self.model.energy(negative_visible_state, negative_hidden_state, name='model')
+        loss = data_energy - model_energy
 
         if self.momentum:
             self.optimizer = tf.train.MomentumOptimizer(self.lr, self.momentum)
         else:
-            self.optimizer = tf.train.GradientDescentOptimizer(self.lr)
+            self.optimizer = tf.train.GradientDescentOptimizer(self.lr, name='optimizer')
 
         # vars = [self.model.W]
         # if self.model.hidden.use_bias:
@@ -63,7 +64,7 @@ class CD(object):
         #
         # if self.model.visible.use_bias:
         #     vars.append(self.model.visible.bias)
-        grads = self.optimizer.compute_gradients(loss)
+        grads = self.optimizer.compute_gradients(-loss)
         for g,v in grads:
             self.trace_data["grad_{}".format(v.name)] = g
 
@@ -72,12 +73,13 @@ class CD(object):
         self.trace_data["positive_hidden_state"] = positive_hidden_state
         self.trace_data["negative_visible_state"] = negative_visible_state
         self.trace_data["negative_hidden_state"] = negative_hidden_state
+        self.trace_data["energy"] = data_energy
         self.trace_data["global_step"] = tf.Variable(initial_value = 0)
 
         update = self.optimizer.apply_gradients(grads, global_step = self.trace_data["global_step"])
         # update = self.optimizer.minimize(loss)
         #self.grads_and_vars = grads_and_vars
-        return [energy, update]
+        return [data_energy, update]
 
 
         # negative_grad = self.multiply_states(negative_sample.end.visible, negative_sample.end.hidden)
@@ -123,7 +125,7 @@ class PCD(CD):
         [visible_negative, hidden_negative] = self.model.burn_in(self.visible_negative, hidden_state=self.hidden_negative, n=self.n)
         self.visible_negative = visible_negative
         self.hidden_negative = hidden_negative
-        return  [tf.stop_gradient(visible_negative), tf.stop_gradient(hidden_negative)]
+        return  [visible_negative, hidden_negative]
 
 def cd(n=1, lr=0.1, momentum=None):
     """
