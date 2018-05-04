@@ -99,10 +99,11 @@ class RBMModel(object):
 
 
     def energy(self, visible_state, hidden_state, name=None):
-        visible_state = tf.stop_gradient(visible_state)
-        hidden_state = tf.stop_gradient(hidden_state)
-        energy = -tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.matmul(visible_state, self.W, name='visible-weights'), hidden_state, name='{}_weights-hidden'.format(name))
-                                               , axis=1, name='{}_sum-of-weights'.format(name)))
+        visible_state = tf.stop_gradient(visible_state, name="{}_visible_sg".format(name))
+        hidden_state = tf.stop_gradient(hidden_state, name="{}_hidden_sg".format(name))
+        energy = -tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.matmul(visible_state, self.W, name='{}_visible_weights'.format(name)),
+                                                           hidden_state, name='{}_weights-hidden'.format(name))
+                                               , axis=1, name='{}_sum-of-weights'.format(name)), name="{}_mean_of_weights".format(name))
 
         if self.visible.use_bias:
             if self.visible.binary:
@@ -163,7 +164,7 @@ class RBMModel(object):
         elif self.debug == 'tensorboard':
             self.session = tf_debug.TensorBoardDebugWrapperSession(self.session)
 
-        #self.session = tf_debug.TensorBoardDebugWrapperSession(self.session, 'localhost:2333')
+        self.session = tf_debug.TensorBoardDebugWrapperSession(self.session, 'localhost:2333')
 
         self.summary_writer = tf.summary.FileWriter('./summary', self.session.graph)
 
