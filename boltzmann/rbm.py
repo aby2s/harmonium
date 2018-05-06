@@ -30,9 +30,7 @@ class RBMLayer(object):
         self.units = units
         self.use_bias = use_bias
         self.default_sampled = sampled
-        if self.use_bias:
-            self.bias = tf.Variable(tf.zeros([units]) if bias is None else bias,
-                                    name=None if name is None else name + '_bias')
+        self.bias = bias
 
 
         if activation in self.activations:
@@ -45,6 +43,11 @@ class RBMLayer(object):
         self.session = None
 
         self.name = name
+
+    def create_variables(self, name):
+        if self.use_bias:
+            self.bias = tf.Variable(tf.zeros([self.units]) if self.bias is None else self.bias,
+                                    name=name + '_bias')
 
     def call(self, input, weights, transpose_weights=False, sampled=None):
         sampled = self.default_sampled if sampled is None else sampled
@@ -72,7 +75,7 @@ class RBMLayer(object):
 
 
 class RBMModel(object):
-    def __init__(self, visible, hidden, weights=None, weights_stddev=0.01, debug = None, name=None):
+    def __init__(self, visible, hidden, session=None, weights=None, weights_stddev=0.01, scope='RBM'):
         """
         :param visible: RBMLayer, visible layer
         :param hidden: RBMLayer, hidden layer
@@ -80,22 +83,26 @@ class RBMModel(object):
         :param weights_stddev: float, if weights aren't provided, RBM weights are initialized with
         gaussian random values with mean=0 and stddev=weights_stddev
         """
-        self.hidden = hidden
-        self.visible = visible
 
+        self.session = tf.Session() if session is None else session
+
+        with tf.variable_scope(scope):
+            self.hidden = hidden
+            self.visible = visible
+
+            if weights is None:
+                self.W = tf.Variable(
+                    tf.random_normal([self.visible.units, self.hidden.units], mean=0.0, stddev=weights_stddev), name='weights')
+            else:
+                self.W = tf.Variable(weights,
+                                     name="weights")
+
+            self.batch_size = tf.placeholder(tf.int32, [], name='batch_size')
+            self.input = tf.placeholder("float", [None, self.visible.units], name='input')
         self.trace_data = list()
 
-        if weights is None:
-            self.W = tf.Variable(
-                tf.random_normal([self.visible.units, self.hidden.units], mean=0.0, stddev=weights_stddev), name='weights')
-        else:
-            self.W = tf.Variable(weights,
-                                 name="weights")
 
-        self.batch_size = tf.placeholder(tf.int32, [], name='batch_size')
-        self.input = tf.placeholder("float", [None, self.visible.units], name='input')
 
-        self.debug = debug
 
 
     def energy(self, visible_state, hidden_state, name=None):
@@ -144,7 +151,7 @@ class RBMModel(object):
 
 
     def compile(self, optimizer,
-                metrics=None, config=None, kernel_regularizer=None, bias_regularizer=None):
+                metrics=None, kernel_regularizer=None, bias_regularizer=None):
         """
         :param optimizer: optimizer instance, supports only cd instance
         :param metrics: unsupported
@@ -154,17 +161,7 @@ class RBMModel(object):
         :param kernel_regularizer: available l1/l2 regularizers or None
         :param bias_regularizer: available l1/l2 regularizers or None
         """
-        if config is not None:
-            self.session = tf.Session()
-        else:
-            self.session = tf.Session(config=config)
 
-        if self.debug == 'local':
-            self.session = tf_debug.LocalCLIDebugWrapperSession(self.session)
-        elif self.debug == 'tensorboard':
-            self.session = tf_debug.TensorBoardDebugWrapperSession(self.session)
-
-        self.session = tf_debug.TensorBoardDebugWrapperSession(self.session, 'localhost:2333')
 
         self.summary_writer = tf.summary.FileWriter('./summary', self.session.graph)
 

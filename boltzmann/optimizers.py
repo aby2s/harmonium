@@ -64,7 +64,7 @@ class CD(object):
         #
         # if self.model.visible.use_bias:
         #     vars.append(self.model.visible.bias)
-        grads = self.optimizer.compute_gradients(loss, gate_gradients=tf.train.Optimizer.GATE_GRAPH) #we need gradient ascent here
+        grads = self.optimizer.compute_gradients(loss) #we need gradient ascent here
         for g,v in grads:
             self.trace_data["grad_{}".format(v.name)] = g
 

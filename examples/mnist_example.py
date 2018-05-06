@@ -11,15 +11,9 @@ from boltzmann.rbm import RBMModel, RBMLayer
 from boltzmann.rbm_utils import save_weights, save_hidden_state
 import tensorflow as tf
 import urllib.request as request
+import sys
 
 from boltzmann.regularizers import SparsityTarget
-
-if not os.path.exists('class_out'):
-    os.makedirs('class_out')
-
-if not os.path.exists('weights'):
-    os.makedirs('weights')
-
 
 def load_mnist(data_path):
     if not os.path.exists(data_path):
@@ -40,35 +34,54 @@ def load_mnist(data_path):
 
     return [train_set[0], valid_set[0], test_set[0]]
 
+def main():
+    if not os.path.exists('class_out'):
+        os.makedirs('class_out')
 
-train_set, valid_set, test_set = load_mnist('.//data')
+    if not os.path.exists('weights'):
+        os.makedirs('weights')
 
-scaler = StandardScaler()
-train_set = scaler.fit_transform(train_set)
-valid_set = scaler.transform(valid_set)
-test_set = scaler.transform(test_set)
-n_hidden = 100
-n_visible = 784
+    train_set, valid_set, test_set = load_mnist('.//data')
 
-config = tf.ConfigProto()
-config.gpu_options.allocator_type = 'BFC'
+    scaler = StandardScaler()
+    train_set = scaler.fit_transform(train_set)
+    valid_set = scaler.transform(valid_set)
+    test_set = scaler.transform(test_set)
+    n_hidden = 100
+    n_visible = 784
 
-rbm = RBMModel(visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=False, sampled=False, name='visible'),
-               hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=False, sampled=False, name='hidden'))#, debug='local')
-rbm.compile(cd(1, lr=1e-3))
-for i in range(10):
-    rbm.fit(train_set, batch_size=128, nb_epoch=1, verbose=2)
-    weights = rbm.get_weights()
-    save_weights('weights/weights{}.jpg'.format(i), weights, shape=(28, 28), tile=(10, 10), spacing=(1, 1))
-    for j in range(5):
-        batch = valid_set[j * 200: (j + 1) * 200]
-        batch_t = rbm.generate(batch, sampled=False)
-        hidden_state = rbm.hidden_state(batch, sampled=False)
+    config = tf.ConfigProto()
+    config.gpu_options.allocator_type = 'BFC'
 
-        save_weights('class_out/output{}.jpg'.format(j), batch_t.T, shape=(28, 28), tile=(20, 10),
-                     spacing=(1, 1))
-        save_hidden_state('class_out/hidden{}.jpg'.format(j), hidden_state)
-        bias = np.array([0])#rbm.visible.get_bias()
-        print("RBM, epoch {}, GENERATE ERROR: {}, MAX WEIGHT: {}, MIN WEIGHT {}, MEDIAN WEIGHT {}, MAX BIAS {}, MIN BIAS {}, MEDIAN BIAS {}".
-              format(i, mean_squared_error(batch, batch_t), np.max(weights), np.min(weights),
-                     np.median(weights), np.max(bias), np.min(bias), np.median(bias)))
+    with tf.Session() as session:
+        # session = tf_debug.TensorBoardDebugWrapperSession(session, 'localhost:2333')
+
+        rbm = RBMModel(
+            visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=True, sampled=False, name='visible'),
+            hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=False,
+                            name='hidden'), session=session)
+        rbm.compile(cd(1, lr=1e-4))
+        for i in range(10):
+            rbm.fit(train_set, batch_size=256, nb_epoch=10, verbose=2, trace=False)
+
+            with open('reses.pickle', 'wb') as f:
+                pickle.dump(rbm.trace_data, f)
+            weights = rbm.get_weights()
+            save_weights('weights/weights{}.jpg'.format(i), weights, shape=(28, 28), tile=(10, 10), spacing=(1, 1))
+            for j in range(5):
+                batch = valid_set[j * 200: (j + 1) * 200]
+                batch_t = rbm.generate(batch, sampled=False)
+                hidden_state = rbm.hidden_state(batch, sampled=False)
+
+                save_weights('class_out/output{}.jpg'.format(j), batch_t.T, shape=(28, 28), tile=(20, 10),
+                             spacing=(1, 1))
+                save_hidden_state('class_out/hidden{}.jpg'.format(j), hidden_state)
+                bias = np.array([0])  # rbm.visible.get_bias()
+                print(
+                    "RBM, epoch {}, GENERATE ERROR: {}, MAX WEIGHT: {}, MIN WEIGHT {}, MEDIAN WEIGHT {}, MAX BIAS {}, MIN BIAS {}, MEDIAN BIAS {}".
+                    format(i, mean_squared_error(batch, batch_t), np.max(weights), np.min(weights),
+                           np.median(weights), np.max(bias), np.min(bias), np.median(bias)))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
