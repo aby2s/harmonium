@@ -12,6 +12,7 @@ from boltzmann.rbm_utils import save_weights, save_hidden_state
 import tensorflow as tf
 import urllib.request as request
 import sys
+from tensorflow.python import debug as tf_debug
 
 from boltzmann.regularizers import SparsityTarget
 
@@ -43,10 +44,11 @@ def main():
 
     train_set, valid_set, test_set = load_mnist('.//data')
 
-    scaler = StandardScaler()
-    train_set = scaler.fit_transform(train_set)
-    valid_set = scaler.transform(valid_set)
-    test_set = scaler.transform(test_set)
+    # scaler = StandardScaler()
+    # train_set = train_set[0:10000]
+    # train_set = scaler.fit_transform(train_set)
+    # valid_set = scaler.transform(valid_set)
+    # test_set = scaler.transform(test_set)
     n_hidden = 100
     n_visible = 784
 
@@ -54,18 +56,19 @@ def main():
     config.gpu_options.allocator_type = 'BFC'
 
     with tf.Session() as session:
-        # session = tf_debug.TensorBoardDebugWrapperSession(session, 'localhost:2333')
+        session = tf_debug.TensorBoardDebugWrapperSession(session, 'localhost:2333')
 
         rbm = RBMModel(
-            visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=True, sampled=False, name='visible'),
-            hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=False,
-                            name='hidden'), session=session)
-        rbm.compile(cd(1, lr=1e-4))
+            visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=True, sampled=False),
+            hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=False), session=session)
+        rbm.compile(pcd(1, lr=1e-2))
         for i in range(10):
-            rbm.fit(train_set, batch_size=256, nb_epoch=10, verbose=2, trace=False)
+            rbm.fit(train_set, batch_size=128, nb_epoch=10, verbose=2, trace=False)
 
             with open('reses.pickle', 'wb') as f:
                 pickle.dump(rbm.trace_data, f)
+
+            #sys.exit()
             weights = rbm.get_weights()
             save_weights('weights/weights{}.jpg'.format(i), weights, shape=(28, 28), tile=(10, 10), spacing=(1, 1))
             for j in range(5):

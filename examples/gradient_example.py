@@ -5,6 +5,7 @@ import numpy as np
 
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
+from tensorflow.python import debug as tf_debug
 
 from boltzmann.optimizers import cd, pcd
 import boltzmann.regularizers as regularizers
@@ -17,7 +18,7 @@ from boltzmann.regularizers import SparsityTarget
 import sys
 
 def main():
-    train_set = np.array([[1,0,1,0],[1,0,1,1],[1,0,1,0],[1,0,1,1],[1,0,1,0],[1,0,1,1]])
+    train_set = np.array([[1,0,1,0],[1,0,1,1],[1,1,1,0],[1,0,1,0],[1,0,1,1],[0,0,1,1]])
 
     n_hidden = 2
     n_visible = 4
@@ -25,9 +26,9 @@ def main():
     config = tf.ConfigProto()
     config.gpu_options.allocator_type = 'BFC'
     with tf.Session() as session:
-        # session = tf_debug.TensorBoardDebugWrapperSession(session, 'localhost:2333')
-        rbm = RBMModel(visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=True, sampled=False, name='visible'),
-                       hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=False, name='hidden'),
+        #session = tf_debug.TensorBoardDebugWrapperSession(session, 'localhost:2333')
+        rbm = RBMModel(visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=True, sampled=False),
+                       hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=False),
                        session=session)
         rbm.compile(cd(1, lr=1e-3))#, kernel_regularizer=regularizers.SparsityTarget(0.01, 0.5), bias_regularizer=regularizers.L2(0.1))
         for i in range(1):

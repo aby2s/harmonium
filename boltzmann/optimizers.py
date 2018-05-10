@@ -49,9 +49,9 @@ class CD(object):
         positive_visible_state = sample
         positive_hidden_state = self.model.hidden.call(positive_visible_state, self.model.W)
         negative_visible_state, negative_hidden_state = self.sample_negative(positive_visible_state, positive_hidden_state)
-        data_energy = self.model.energy(positive_visible_state, positive_hidden_state, name='data')
-        model_energy = self.model.energy(negative_visible_state, negative_hidden_state, name='model')
-        loss = data_energy - model_energy
+        data_energy = self.model.energy(positive_visible_state, positive_hidden_state, scope='data_energy')
+        model_energy = self.model.energy(negative_visible_state, negative_hidden_state, scope='model_energy')
+        loss = tf.subtract(data_energy, model_energy, name='loss')
 
         if self.momentum:
             self.optimizer = tf.train.MomentumOptimizer(self.lr, self.momentum)
@@ -74,7 +74,7 @@ class CD(object):
         self.trace_data["negative_visible_state"] = negative_visible_state
         self.trace_data["negative_hidden_state"] = negative_hidden_state
         self.trace_data["energy"] = data_energy
-        self.trace_data["global_step"] = tf.Variable(initial_value = 0)
+        self.trace_data["global_step"] = tf.get_variable(name='global_step', initializer=0)
 
         update = self.optimizer.apply_gradients(grads, global_step = self.trace_data["global_step"])
         # update = self.optimizer.minimize(loss)
@@ -119,7 +119,7 @@ class PCD(CD):
 
     def sample_negative(self, visible, hidden):
         if self.visible_negative is None:
-            self.visible_negative = self.model.hidden.nonlinearity(tf.random_normal(tf.shape(self.model.input)), sampled=True)
+            self.visible_negative = visible
 
 
         [visible_negative, hidden_negative] = self.model.burn_in(self.visible_negative, hidden_state=self.hidden_negative, n=self.n)

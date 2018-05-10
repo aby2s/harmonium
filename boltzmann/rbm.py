@@ -2,8 +2,6 @@ import tensorflow as tf
 import numpy as np
 import collections
 import pickle
-from tensorflow.python import debug as tf_debug
-
 from boltzmann.core import sample_bernoulli, sample_gaussian
 
 
@@ -16,7 +14,6 @@ class RBMLayer(object):
                  activation=None,
                  use_bias=False,
                  bias=None,
-                 name=None,
                  sampled=False):
         """
 
@@ -30,7 +27,7 @@ class RBMLayer(object):
         self.units = units
         self.use_bias = use_bias
         self.default_sampled = sampled
-        self.bias = bias
+        self.bias_initializer = bias
 
 
         if activation in self.activations:
@@ -42,12 +39,13 @@ class RBMLayer(object):
 
         self.session = None
 
+    def initialize(self, session, name='layer'):
+        self.session = session
         self.name = name
-
-    def create_variables(self, name):
         if self.use_bias:
-            self.bias = tf.Variable(tf.zeros([self.units]) if self.bias is None else self.bias,
-                                    name=name + '_bias')
+            self.bias = tf.get_variable(name=name + '_bias', shape=(self.units,),
+                                        initializer=tf.zeros_initializer() if self.bias_initializer is None
+                                        else tf.constant_initializer(self.bias_initializer))
 
     def call(self, input, weights, transpose_weights=False, sampled=None):
         sampled = self.default_sampled if sampled is None else sampled
@@ -85,49 +83,47 @@ class RBMModel(object):
         """
 
         self.session = tf.Session() if session is None else session
+        self.hidden = hidden
+        self.visible = visible
 
-        with tf.variable_scope(scope):
-            self.hidden = hidden
-            self.visible = visible
+        with tf.variable_scope(scope) as scope:
+            self.W = tf.get_variable(name='weights', shape=(self.visible.units, self.hidden.units),
+                                     initializer=tf.random_normal_initializer(stddev=weights_stddev) if weights is None
+                                     else tf.constant_initializer(weights))
 
-            if weights is None:
-                self.W = tf.Variable(
-                    tf.random_normal([self.visible.units, self.hidden.units], mean=0.0, stddev=weights_stddev), name='weights')
-            else:
-                self.W = tf.Variable(weights,
-                                     name="weights")
-
-            self.batch_size = tf.placeholder(tf.int32, [], name='batch_size')
+            self.visible.initialize(self.session, name='visible')
+            self.hidden.initialize(self.session, name='hidden')
             self.input = tf.placeholder("float", [None, self.visible.units], name='input')
         self.trace_data = list()
 
+        self.scope = scope
 
 
 
+    def energy(self, visible_state, hidden_state, scope='energy'):
+        with tf.variable_scope(scope):
+            visible_state = tf.stop_gradient(visible_state, name="visible_state")
+            hidden_state = tf.stop_gradient(hidden_state, name="hidden_state")
+            energy = -tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.matmul(visible_state, self.W, name='visible_weights'),
+                                                               hidden_state, name='weights_hidden')
+                                                   , axis=1, name='energy_sum'), name="batch_energy_mean")
 
-    def energy(self, visible_state, hidden_state, name=None):
-        visible_state = tf.stop_gradient(visible_state, name="{}_visible_sg".format(name))
-        hidden_state = tf.stop_gradient(hidden_state, name="{}_hidden_sg".format(name))
-        energy = -tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.matmul(visible_state, self.W, name='{}_visible_weights'.format(name)),
-                                                           hidden_state, name='{}_weights-hidden'.format(name))
-                                               , axis=1, name='{}_sum-of-weights'.format(name)), name="{}_mean_of_weights".format(name))
-
-        if self.visible.use_bias:
-            if self.visible.binary:
-                energy = tf.add(energy, -tf.reduce_mean(
-                    tf.reduce_sum(tf.multiply(self.visible.bias, visible_state, name='{}_visible-bias-energy'.format(name)), axis=1)))
-            else:
-                v = visible_state - self.visible.bias
-                energy = tf.add(energy,  tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
+            if self.visible.use_bias:
+                if self.visible.binary:
+                    energy = tf.add(energy, -tf.reduce_mean(
+                        tf.reduce_sum(tf.multiply(self.visible.bias, visible_state, name='visible_bias_energy'), axis=1)))
+                else:
+                    v = visible_state - self.visible.bias
+                    energy = tf.add(energy,  tf.reduce_mean(tf.reduce_sum(tf.multiply(v, v) / 2, axis=1)))
 
 
-        if self.hidden.use_bias:
-            if self.hidden.binary:
-                energy = tf.add(energy, -tf.reduce_mean(
-                    tf.reduce_sum(tf.multiply(self.hidden.bias, hidden_state, name='{}_hidden-bias-energy'.format(name)), axis=1)))
-            else:
-                h = hidden_state - self.hidden.bias
-                energy = tf.add(energy, tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
+            if self.hidden.use_bias:
+                if self.hidden.binary:
+                    energy = tf.add(energy, -tf.reduce_mean(
+                        tf.reduce_sum(tf.multiply(self.hidden.bias, hidden_state, name='hidden_bias_energy'), axis=1)))
+                else:
+                    h = hidden_state - self.hidden.bias
+                    energy = tf.add(energy, tf.reduce_mean(tf.reduce_sum(tf.multiply(h, h) / 2, axis=1)))
 
         return energy
 
@@ -165,37 +161,36 @@ class RBMModel(object):
 
         self.summary_writer = tf.summary.FileWriter('./summary', self.session.graph)
 
-        self.visible.session = self.session
-        self.hidden.session = self.session
+        with tf.variable_scope(self.scope):
+            with tf.name_scope(self.scope.original_name_scope):
+                self.optimizer = optimizer(self)
 
+                [energy, update] = self.optimizer.get_cost_update(
+                    self.input)
 
+                self.energy_val = energy
+                self.cost_update, self.cost = tf.metrics.mean(energy)
+                self.update = update
 
+                if kernel_regularizer:
+                    self.kernel_regularizer = kernel_regularizer(self, self.W)
+                else:
+                    self.kernel_regularizer = None
 
+                if bias_regularizer is not None:
+                    self.visible_bias_regularizer = bias_regularizer(self, self.visible.bias)
+                    self.hidden_bias_regularizer = bias_regularizer(self, self.hidden.bias)
+                else:
+                    self.visible_bias_regularizer = None
+                    self.hidden_bias_regularizer = None
 
-        self.optimizer = optimizer(self)
-
-        [energy, update] = self.optimizer.get_cost_update(
-            self.input)
-
-        self.cost = energy
-        self.update = update
-
-        if kernel_regularizer:
-            self.kernel_regularizer = kernel_regularizer(self, self.W)
-        else:
-            self.kernel_regularizer = None
-
-        if bias_regularizer is not None:
-            self.visible_bias_regularizer = bias_regularizer(self, self.visible.bias)
-            self.hidden_bias_regularizer = bias_regularizer(self, self.hidden.bias)
-        else:
-            self.visible_bias_regularizer = None
-            self.hidden_bias_regularizer = None
-
+        self.kernel_regularizer = None
+        self.visible_bias_regularizer = None
+        self.hidden_bias_regularizer = None
 
         self.session.run(tf.global_variables_initializer())
 
-    def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=True, trace = False):
+    def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=False, trace = False):
         """
         Do RBM fitting on provided training set
         :param x: 2d-array, training set
@@ -213,7 +208,7 @@ class RBMModel(object):
         #
         # debug = [self.W, self.hidden.bias, self.visible.bias] + self.optimizer.states + [x[0] for x in self.optimizer.grads_and_vars] + [self.cost]
         #session_run += debug
-        session_run = [self.update, self.cost]
+        session_run = [self.update, self.cost_update, self.cost]
 
         regularizers = []
         if self.kernel_regularizer is not None:
@@ -244,16 +239,17 @@ class RBMModel(object):
 
             batches = [(i * batch_size, min(samples_num, (i + 1) * batch_size)) for i in range(0, batches_num)]
             free_energy = 0
+            self.session.run([tf.local_variables_initializer()])
             for batch_indices in batches:
                 batch = x[index_array[batch_indices[0]:batch_indices[1]]]
 
                 if trace:
-                    trace_res = self.session.run(trace_tensors, feed_dict={self.input: batch, self.batch_size: batch_size})
+                    trace_res = self.session.run(trace_tensors, feed_dict={self.input: batch})
                     self.trace_data.append(dict(zip(trace_vars, trace_res)))
                 #res = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
-                res = self.session.run(session_run, feed_dict={self.input: batch, self.batch_size: batch_size})
+                res = self.session.run(session_run, feed_dict={self.input: batch})
                 if len(regularizers) > 0:
-                    self.session.run(regularizers, feed_dict={self.input: batch, self.batch_size: batch_size})
+                    self.session.run(regularizers, feed_dict={self.input: batch})
 
                 #res2 = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
   #              with open('reses.pickle', 'wb') as f:
@@ -263,7 +259,7 @@ class RBMModel(object):
                 if verbose == 1:
                     self.log('{}/{} free energy: {}'.format(batch_indices[1], len(x), free_energy))
             if verbose > 0:
-                self.log('Epoch complete, last free energy {}'.format(free_energy))
+                self.log('Epoch complete, free energy {}'.format(free_energy))
 
         if verbose > 0:
             self.log('Fitting completed')
