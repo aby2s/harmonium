@@ -9,6 +9,6 @@ setup(name='harmonium',
       author_email='aby2sz@gmail.com',
       url='https://github.com/aby2s/harmonium',
       download_url='https://github.com/aby2s/harmonium',
-      license='MIT',
+      license='Apache 2.0',
       install_requires=['tensorflow','numpy', 'Pillow', 'scikit-learn'],
       packages=find_packages())
