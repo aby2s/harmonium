@@ -2,7 +2,7 @@ from setuptools import setup
 from setuptools import find_packages
 
 
-setup(name='boltzmann',
+setup(name='harmonium',
       version='0.0.2',
       description='Framework for building RBM',
       author='Nikolay Zenovkin',

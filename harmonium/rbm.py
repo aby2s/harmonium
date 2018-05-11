@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 import collections
 import pickle
-from boltzmann.core import sample_bernoulli, sample_gaussian
+from harmonium.core import sample_bernoulli, sample_gaussian
 
 
 class RBMLayer(object):
@@ -202,11 +202,6 @@ class RBMModel(object):
         if verbose > 0:
             print("Fitting RBM on {} samples with {} batch size and {} epochs".format(len(x), batch_size, nb_epoch))
 
-
-        # session_run = [self.update]
-        #
-        # debug = [self.W, self.hidden.bias, self.visible.bias] + self.optimizer.states + [x[0] for x in self.optimizer.grads_and_vars] + [self.cost]
-        #session_run += debug
         session_run = [self.update, self.cost_update, self.cost]
 
         if self.kernel_regularizer is not None:

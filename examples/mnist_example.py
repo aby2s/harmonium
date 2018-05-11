@@ -7,15 +7,15 @@ import numpy as np
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 
-from boltzmann.optimizers import cd, pcd
-from boltzmann.rbm import RBMModel, RBMLayer
-from boltzmann.rbm_utils import save_weights, save_hidden_state
+from harmonium.optimizers import cd, pcd
+from harmonium.rbm import RBMModel, RBMLayer
+from harmonium.rbm_utils import save_weights, save_hidden_state
 import tensorflow as tf
 import urllib.request as request
 import sys
 from tensorflow.python import debug as tf_debug
 
-from boltzmann.regularizers import SparsityTarget
+from harmonium.regularizers import SparsityTarget
 
 
 def load_mnist(data_path):
