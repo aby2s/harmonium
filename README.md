@@ -1,11 +1,12 @@
-# Harmonium
+Harmonium
+=========
 Simple Restricted Boltzmann Machine implementation with TensorFlow.
 Implementation supports sigmoid, relu and linear visible/hidden units, l1/l2/sparsity regularization, contrastive divergence and stochastic maximum likelihood learning (sml/pcd) with momentum.
 
 
 
-# Writing a Simple RBM
-
+Writing a Simple RBM
+--------------------
 ```python
  # Here is a simple code sample
  # See harmonium/rbm.py for an API documentation
@@ -23,24 +24,24 @@ harmonium/rbm_utils.py contains some simple utilities to explore RBM weights.
 save_weights function saves weights as separate maps for every hidden neuron. For grayscale RBM images it should print set of learned features.
 save_hidden_state function saves changes in hidden states across a set of samples. For well-trained RBM it shouldn't contain continous white or black lines.
 
-# Installation
-
+Installation
+------------
 ```shell
 git clone https://github.com/aby2s/harmonium.git
 cd harmonium
 python setup.py install
 ```
-# Release notes
-## Version 0.0.2
+Release notes
+-------------
+### Version 0.0.2 ###
 * Renamed to harmonium
 * Manual gradient calculation changed to tensorflow optimizers with stop_gradient applied on rbm states
 * Added PCD optimizer
-
-## Version 0.0.1
+### Version 0.0.1 ###
 * Initial release
 
-# Contacts
-
+Contacts
+--------
 Create an issue or send me an email (aby2sz@gmail.com).
 
 
