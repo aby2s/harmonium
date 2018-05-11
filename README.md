@@ -4,7 +4,7 @@ Implementation supports sigmoid, relu and linear visible/hidden units, l1/l2/spa
 
 
 
-## Writing a Simple RBM
+# Writing a Simple RBM
 
 ```python
  # Here is a simple code sample
@@ -31,12 +31,12 @@ cd harmonium
 python setup.py install
 ```
 # Release notes
-# Version 0.0.2
+## Version 0.0.2
 * Renamed to harmonium
 * Manual gradient calculation changed to tensorflow optimizers with stop_gradient applied on rbm states
 * Added PCD optimizer
 
-# Version 0.0.1
+## Version 0.0.1
 * Initial release
 
 # Contacts
