@@ -1,3 +1,4 @@
+import argparse
 import gzip
 import os
 import pickle
@@ -15,6 +16,7 @@ import sys
 from tensorflow.python import debug as tf_debug
 
 from boltzmann.regularizers import SparsityTarget
+
 
 def load_mnist(data_path):
     if not os.path.exists(data_path):
@@ -35,55 +37,90 @@ def load_mnist(data_path):
 
     return [train_set[0], valid_set[0], test_set[0]]
 
+
 def main():
-    if not os.path.exists('class_out'):
-        os.makedirs('class_out')
+    parser = argparse.ArgumentParser(
+        description='Example of RBM training on MNIST dataset. You can tune some parameters via command line.')
 
-    if not os.path.exists('weights'):
-        os.makedirs('weights')
+    parser.add_argument('--hidden_units', action="store", dest="hidden_units", default=100, type=int,
+                        help='Number of hidden units', required=False)
 
-    train_set, valid_set, test_set = load_mnist('.//data')
+    parser.add_argument('--visible_bias', action="store_true", dest="visible_bias", default=True,
+                        help='Use visible bias', required=False)
 
-    # scaler = StandardScaler()
-    # train_set = train_set[0:10000]
-    # train_set = scaler.fit_transform(train_set)
-    # valid_set = scaler.transform(valid_set)
-    # test_set = scaler.transform(test_set)
-    n_hidden = 100
+    parser.add_argument('--hidden_bias', action="store_true", dest="hidden_bias", default=True,
+                        help='Use hidden bias', required=False)
+
+    parser.add_argument('--visible_activation', action="store", dest="visible_activation", default='sigmoid',
+                        choices=['sigmoid', 'linear'], help='Visible units type', required=False)
+
+    parser.add_argument('--hidden_activation', action="store", dest="hidden_activation", default='sigmoid',
+                        choices=['sigmoid', 'relu'], help='Hidden units type', required=False)
+
+    parser.add_argument('--output_folder', action="store", dest="output_folder", default='./output',
+                        help='Folder to store outputs, hidden activations and weights', required=False)
+
+    parser.add_argument('--mnist_folder', action="store", dest="mnist_folder", default='./data',
+                        help='Folder containing mnist dataset. If not present, it will be downloaded automatically',
+                        required=False)
+
+    parser.add_argument('--tfdebug', action="store", dest="tfdebug", default=None, choices=['cli', 'tensorboard'],
+                        help='Use debug session wrapper: cli, tensorboard or none', required=False)
+
+    parser.add_argument('--tbserver', action="store", dest="tbserver", default='localhost:2333',
+                        help='TensorBoard server address to use with TensorBoardDebugWrapperSession',
+                        required=False)
+
+    params = parser.parse_args(sys.argv[1:])
+
+    if not os.path.exists(params.output_folder):
+        os.makedirs(params.output_folder)
+
+    train_set, valid_set, test_set = load_mnist(params.mnist_folder)
+
+    if params.visible_activation == 'linear':
+        scaler = StandardScaler()
+        train_set = scaler.fit_transform(train_set)
+        valid_set = scaler.transform(valid_set)
+        test_set = scaler.transform(test_set)
+
+    n_hidden = params.hidden_units
     n_visible = 784
 
-    config = tf.ConfigProto()
-    config.gpu_options.allocator_type = 'BFC'
-
     with tf.Session() as session:
-        session = tf_debug.TensorBoardDebugWrapperSession(session, 'localhost:2333')
+        if params.tfdebug == 'cli':
+            session = tf_debug.LocalCLIDebugWrapperSession(session)
+        elif params.tfdebug == 'tensorboard':
+            session = tf_debug.TensorBoardDebugWrapperSession(session, params.tbserver)
 
-        rbm = RBMModel(
-            visible=RBMLayer(activation='sigmoid', units=n_visible, use_bias=True, sampled=False),
-            hidden=RBMLayer(activation='sigmoid', units=n_hidden, use_bias=True, sampled=False), session=session)
-        rbm.compile(pcd(1, lr=1e-2))
+        rbm = RBMModel(visible=RBMLayer(activation=params.visible_activation, units=n_visible,
+                                        use_bias=params.visible_bias, sampled=False),
+                       hidden=RBMLayer(activation=params.hidden_activation, units=n_hidden,
+                                       use_bias=params.hidden_bias, sampled=True),
+                       session=session)
+
+        rbm.compile(pcd(1, lr=1e-2), kernel_regularizer=SparsityTarget(l=0.9, p=0.01))
+
+        visualisation_set = valid_set[np.random.randint(len(valid_set), size=400)]
         for i in range(10):
-            rbm.fit(train_set, batch_size=128, nb_epoch=10, verbose=2, trace=False)
+            rbm.fit(train_set, batch_size=128, nb_epoch=10, verbose=2)
 
-            with open('reses.pickle', 'wb') as f:
-                pickle.dump(rbm.trace_data, f)
-
-            #sys.exit()
             weights = rbm.get_weights()
-            save_weights('weights/weights{}.jpg'.format(i), weights, shape=(28, 28), tile=(10, 10), spacing=(1, 1))
-            for j in range(5):
-                batch = valid_set[j * 200: (j + 1) * 200]
-                batch_t = rbm.generate(batch, sampled=False)
-                hidden_state = rbm.hidden_state(batch, sampled=False)
+            save_weights(os.path.join(params.output_folder, 'weights{}.jpg'.format(i)), weights, shape=(28, 28), tile=(10, 10), spacing=(1, 1))
+            visualisation_inference = rbm.generate(visualisation_set, sampled=False)
 
-                save_weights('class_out/output{}.jpg'.format(j), batch_t.T, shape=(28, 28), tile=(20, 10),
-                             spacing=(1, 1))
-                save_hidden_state('class_out/hidden{}.jpg'.format(j), hidden_state)
-                bias = np.array([0])  # rbm.visible.get_bias()
-                print(
-                    "RBM, epoch {}, GENERATE ERROR: {}, MAX WEIGHT: {}, MIN WEIGHT {}, MEDIAN WEIGHT {}, MAX BIAS {}, MIN BIAS {}, MEDIAN BIAS {}".
-                    format(i, mean_squared_error(batch, batch_t), np.max(weights), np.min(weights),
-                           np.median(weights), np.max(bias), np.min(bias), np.median(bias)))
+            if params.visible_activation == 'linear':
+                visualisation_inference = scaler.inverse_transform(visualisation_inference)
+
+            hidden_state = rbm.hidden_state(visualisation_inference, sampled=True)
+            save_weights(os.path.join(params.output_folder, 'output{}.jpg'.format(i)),
+                         visualisation_inference.T, shape=(28, 28), tile=(20, 20), spacing=(1, 1))
+
+            save_hidden_state(os.path.join(params.output_folder, 'hidden{}.jpg'.format(i)), hidden_state)
+            bias = np.array([0])  # rbm.visible.get_bias()
+            print("RBM, epoch {}, GENERATE ERROR: {}, MAX WEIGHT: {}, MIN WEIGHT {}, MEDIAN WEIGHT {}, MAX BIAS {}, MIN BIAS {}, MEDIAN BIAS {}".
+                        format(i, mean_squared_error(visualisation_set, visualisation_inference), np.max(weights), np.min(weights),
+                               np.median(weights), np.max(bias), np.min(bias), np.median(bias)))
 
 
 if __name__ == "__main__":

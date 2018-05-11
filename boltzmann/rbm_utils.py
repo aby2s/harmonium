@@ -53,10 +53,3 @@ def save_hidden_state(file, hidden_state):
     hidden_state = 255 * (hidden_state - current_min) / (current_max - current_min)
     image = Image.fromarray(hidden_state.astype(np.uint8))
     image.save(file)
-
-
-
-
-weights = np.random.uniform(size=(230, 189))
-
-save_weights("./test_r.jpg", weights, shape=(16,16), tile=(20, 10))

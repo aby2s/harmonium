@@ -94,7 +94,6 @@ class RBMModel(object):
             self.visible.initialize(self.session, name='visible')
             self.hidden.initialize(self.session, name='hidden')
             self.input = tf.placeholder("float", [None, self.visible.units], name='input')
-        self.trace_data = list()
 
         self.scope = scope
 
@@ -190,7 +189,7 @@ class RBMModel(object):
 
         self.session.run(tf.global_variables_initializer())
 
-    def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=False, trace = False):
+    def fit(self, x, batch_size=32, nb_epoch=10, verbose=1, validation_data=None, shuffle=False):
         """
         Do RBM fitting on provided training set
         :param x: 2d-array, training set
@@ -210,25 +209,20 @@ class RBMModel(object):
         #session_run += debug
         session_run = [self.update, self.cost_update, self.cost]
 
-        regularizers = []
         if self.kernel_regularizer is not None:
-            regularizers.append(self.kernel_regularizer)
+            session_run.append(self.kernel_regularizer)
 
         if self.visible_bias_regularizer is not None:
-            regularizers.append(self.visible_bias_regularizer)
+            session_run.append(self.visible_bias_regularizer)
 
         if self.hidden_bias_regularizer is not None:
-            regularizers.append(self.hidden_bias_regularizer)
+            session_run.append(self.hidden_bias_regularizer)
+
 
         samples_num = len(x)
         index_array = np.arange(samples_num)
 
         batches_num = int(len(x) / batch_size) + (1 if len(x) % batch_size > 0 else 0)
-
-        if trace:
-            trace_data = {'weights': self.W, 'visible_bias': self.visible.bias, 'hidden_bias': self.hidden.bias}
-            trace_data.update(self.optimizer.trace_data)
-            trace_vars, trace_tensors = zip(*trace_data.items())
 
         for j in range(nb_epoch):
             if verbose > 0:
@@ -243,18 +237,9 @@ class RBMModel(object):
             for batch_indices in batches:
                 batch = x[index_array[batch_indices[0]:batch_indices[1]]]
 
-                if trace:
-                    trace_res = self.session.run(trace_tensors, feed_dict={self.input: batch})
-                    self.trace_data.append(dict(zip(trace_vars, trace_res)))
-                #res = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
                 res = self.session.run(session_run, feed_dict={self.input: batch})
-                if len(regularizers) > 0:
-                    self.session.run(regularizers, feed_dict={self.input: batch})
 
-                #res2 = self.session.run(debug, feed_dict={self.input: batch, self.batch_size: batch_size})
-  #              with open('reses.pickle', 'wb') as f:
-   #                 pickle.dump([res, res1, res2], f)
-                free_energy = res[-1]
+                free_energy = res[2]
 
                 if verbose == 1:
                     self.log('{}/{} free energy: {}'.format(batch_indices[1], len(x), free_energy))
