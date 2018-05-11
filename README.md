@@ -1,6 +1,6 @@
 # Harmonium
 Simple Restricted Boltzmann Machine implementation with TensorFlow.
-Implementation supports sigmoid, relu and linear visible/hidden units, l1/l2/sparsity regularization and contrastive divergence learning with momentum.
+Implementation supports sigmoid, relu and linear visible/hidden units, l1/l2/sparsity regularization, contrastive divergence and stochastic maximum likelihood learning (sml/pcd) with momentum.
 
 
 
@@ -30,6 +30,14 @@ git clone https://github.com/aby2s/harmonium.git
 cd harmonium
 python setup.py install
 ```
+# Release notes
+# Version 0.0.2
+* Renamed to harmonium
+* Manual gradient calculation changed to tensorflow optimizers with stop_gradient applied on rbm states
+* Added PCD optimizer
+
+# Version 0.0.1
+* Initial release
 
 # Contacts
 
